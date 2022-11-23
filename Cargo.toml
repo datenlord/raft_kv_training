@@ -1,0 +1,13 @@
+[package]
+name = "raft_kv"
+version = "0.1.0"
+edition = "2021"
+author = ["Phoenix <Phoenix500526@163.com>"]
+license = "Apache-2.0"
+keywords = ["raft", "distributed kv"]
+description = "A distributed key-value database in rust"
+categories = ["raft kv store"]
+repository = "https://github.com/Phoenix500526/raft_kv"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
