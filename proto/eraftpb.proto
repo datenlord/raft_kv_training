@@ -1,74 +1,232 @@
 syntax = "proto3";
 package eraftpb;
 
-enum EntryType {
-    EntryNormal = 0;
+
+// The entry is a type of change that needs to be applied. .
+message Entry {
+    oneof data {
+        // normal entry
+        EntryNormal normal = 1;
+    }
 }
 
-// The entry is a type of change that needs to be applied. It contains two data fields.
-// While the fields are built into the model; their usage is determined by the entry_type.
-//
-// For normal entries, the data field should contain the data change that should be applied.
+// normal entries, the data field should contain the data change that should be applied.
 // The context field can be used for any contextual data that might be relevant to the
 // application of the data.
-//
-// For configuration changes, the data will contain the ConfChange message and the
-// context will provide anything needed to assist the configuration change. The context
-// is for the user to set and use in this case.
-message Entry {
-    EntryType entry_type = 1;
-    uint64 term = 2;
-    uint64 index = 3;
-    bytes data = 4;
+message EntryNormal {
+    // current term
+    uint64 term = 1;
+    // entry index
+    uint64 index = 2;
+    // entry context
+    bytes data = 3;
 }
 
-// Some MessageType defined here are local messages which not come from the network, but should
-// also use the Step method to handle
-enum MessageType {
-    // 'MessageType_MsgHup' is a local message used for election. If an election timeout happened,
-    // the node should pass 'MessageType_MsgHup' to its Step method and start a new election.
-    MsgHup = 0;
-    // 'MessageType_MsgBeat' is a local message that signals the leader to send a heartbeat
-    // of the 'MessageType_MsgHeartbeat' type to its followers.
-    MsgBeat = 1;
-    // 'MessageType_MsgPropose' is a local message that proposes to append data to the leader's log entries.
-    MsgPropose = 2;
-    // 'MessageType_MsgAppend' contains log entries to replicate.
-    MsgAppend = 3;
-    // 'MessageType_MsgAppendResponse' is response to log replication request('MessageType_MsgAppend').
-    MsgAppendResponse = 4;
-    // 'MessageType_MsgRequestVote' requests votes for election.
-    MsgRequestVote = 5;
-    // 'MessageType_MsgRequestVoteResponse' contains responses from voting request.
-    MsgRequestVoteResponse = 6;
-    // 'MessageType_MsgHeartbeat' sends heartbeat from leader to its followers.
-    MsgHeartbeat = 8;
-    // 'MessageType_MsgHeartbeatResponse' is a response to 'MessageType_MsgHeartbeat'.
-    MsgHeartbeatResponse = 9;
-}
 
-message Message {
-    MessageType msg_type = 1;
-    uint64 to = 2;
-    uint64 from = 3;
-    uint64 term = 4;
-    uint64 log_term = 5;
-    uint64 index = 6;
-    repeated Entry entries = 7;
-    uint64 commit = 8;
-    bool reject = 10;
-}
-
-// HardState contains the state of a node need to be peristed, including the current term, commit index
+// `HardState` contains the state of a node need to be peristed, including the current term, commit index
 // and the vote record
 message HardState {
+    // the current term
     uint64 term = 1;
+    // the commit index
     uint64 vote = 2;
+    // the vote record
     uint64 commit = 3;
 }
 
-// ConfState contains the current membership information of the raft group
+// `ConfState` contains the current membership information of the raft group
 message ConfState {
     // all node id
     repeated uint64 nodes = 1;
+}
+
+// Message definition 
+message Message {
+    oneof data {
+        // `MsgHup` is a local message used for election. If an election timeout happened,
+	    // the node should pass `MsgHup` to its Step method and start a new election.
+        MsgHup hup = 1;
+        // `MsgBeat' is a local message that signals the leader to send a heartbeat
+	    // of the `MsgBeat` type to its followers.
+        MsgBeat beat = 2;
+        // `MsgPropose` is a local message that proposes to append data to the leader's log entries.
+        MsgPropose propose = 3;
+        // `MsgAppend` contains log entries to replicate.
+        MsgAppend append = 4;
+        // `MsgHeartbeat` sends heartbeat from leader to its followers.
+        MsgHeartbeat heartbeat = 5;
+        // `MsgRequestVote` requests votes for election.
+        MsgRequestVote request_vote = 6;
+        // `MsgTimeoutNow` send from the leader to the leadership transfer target, to let
+	    // the transfer target timeout immediately and start a new election.
+        MsgTimeoutNow timeout = 7;
+        // `MsgAppendResponse' is response to log replication request(`MsgAppend`).
+        MsgAppendResponse append_response = 8;
+        // `MsgHeartbeatResponse` is a response to `MsgHeartbeat`.
+        MsgHeartbeatResponse heartbeat_response = 9;
+        // `MsgRequestVoteResponse` contains responses from voting request.
+        MsgRequestVoteResponse request_vote_response = 10;
+    }
+}
+
+// `MsgHup` is used for election. If a node is a follower or candidate, the
+// `tick` function in `raft` struct is set as `tickElection`. If a follower or
+// candidate has not received any heartbeat before the election timeout, it
+// passes `MsgHup` to its Step method and becomes (or remains) a candidate to
+// start a new election.
+message MsgHup {
+    // sender id
+    uint64 from = 1;
+    // receiver id
+    uint64 to = 2;
+}
+
+// `MsgBeat` is an internal type that signals the leader to send a heartbeat of
+// the `MsgHeartbeat` type. If a node is a leader, the `tick` function in
+// the raft struct is set as `tickHeartbeat`, and triggers the leader to
+// send periodic `MsgHeartbeat` messages to its followers. 
+message MsgBeat {
+    // sender id
+    uint64 from = 1;
+    // receiver id
+    uint64 to = 2;
+}
+
+// `MsgTimeoutNow` send from the leader to the leadership transfer target, to let
+// the transfer target timeout immediately and start a new election.
+message MsgTimeoutNow {
+    // sender id
+    uint64 from = 1;
+    // receiver id
+    uint64 to = 2;
+}
+
+
+// `MsgPropose` proposes to append data to its log entries. This is a special
+// type to redirect proposals to the leader. Therefore, send method overwrites
+// eraftpb.Message's term with its `HardState`'s term to avoid attaching its
+// local term to `MsgPropose`. When `MsgPropose` is passed to the leader's `Step`
+// method, the leader first calls the `AppendEntry` method to append entries
+// to its log, and then calls `bcastAppend` method to send those entries to
+// its peers. When passed to candidate, `MsgPropose` is dropped. When passed to
+// follower, `MsgPropose` is stored in follower's mailbox(msgs) by the send
+// method. It is stored with sender's ID and later forwarded to the leader by
+// rafthttp package.
+message MsgPropose {
+    // sender id
+    uint64 from = 1;
+    // receiver id
+    uint64 to = 2;
+    // proposals
+    repeated Entry entries = 3;
+}
+
+// `MsgAppend` contains log entries to replicate. A leader calls bcastAppend,
+// which calls sendAppend, which sends soon-to-be-replicated logs in `MsgAppend`
+// type. When `MsgAppend` is passed to candidate's Step method, candidate reverts
+// back to follower, because it indicates that there is a valid leader sending
+// `MsgAppend` messages. Candidate and follower respond to this message in
+// `MsgAppendResponse` type.
+message MsgAppend {
+    // sender id
+    uint64 from = 1;
+    // receiver id
+    uint64 to = 2;
+    // current term
+    uint64 term = 3;
+    // commit index
+    uint64 commit = 4;
+    // last log term
+    uint64 log_term = 5;
+    // log index
+    uint64 index = 6;
+    // log entries
+    repeated Entry entries = 7;
+}
+
+// `MsgAppendResponse` is response to log replication request(`MsgAppend`). When
+// `MsgAppend` is passed to candidate or follower's Step method, it responds by
+// calling `handleAppendEntries` method, which sends `MsgAppendResponse` to raft
+// mailbox.
+message MsgAppendResponse {
+    // sender id
+    uint64 from = 1;
+    // receiver id
+    uint64 to = 2;
+    // current term
+    uint64 term = 3;
+    // reject AppendReuqeust or not
+    bool reject = 4; 
+    // log term
+    uint64 log_term = 5;
+    // log index
+    uint64 index = 6;
+}
+
+// `MsgRequestVote` requests votes for election. When a node is a follower or
+// candidate and `MsgHup` is passed to its Step method, then the node calls
+// `campaign` method to campaign itself to become a leader. Once `campaign`
+// method is called, the node becomes candidate and sends `MsgRequestVote` to peers
+// in cluster to request votes. When passed to the leader or candidate's Step
+// method and the message's Term is lower than leader's or candidate's,
+message MsgRequestVote {
+    // sender id
+    uint64 from = 1;
+    // receiver id
+    uint64 to = 2;
+    // current term
+    uint64 term = 3;
+    // log term
+    uint64 log_term = 4;
+    // log index
+    uint64 index = 5;
+}
+
+// `MsgRequestVoteResponse` contains responses from voting request. When `MsgRequestVoteResponse` is
+// passed to candidate, the candidate calculates how many votes it has won. If
+// it's more than majority (quorum), it becomes leader and calls `bcastAppend`.
+// If candidate receives majority of votes of denials, it reverts back to
+// follower.
+message MsgRequestVoteResponse {
+    // sender id
+    uint64 from = 1; 
+    // receiver id
+    uint64 to = 2;
+    // sender's current term
+    uint64 term = 3;
+    // reject the voted request or not
+    bool reject = 4;
+}
+
+
+
+// `MsgHeartbeat` sends heartbeat from leader. When `MsgHeartbeat` is passed
+// to candidate and message's term is higher than candidate's, the candidate
+// reverts back to follower and updates its committed index from the one in
+// this heartbeat. And it sends the message to its mailbox. When
+// `MsgHeartbeat` is passed to follower's Step method and message's term is
+// higher than follower's, the follower updates its `leaderID` with the ID
+// from the message.
+message MsgHeartbeat {
+    // sender id
+    uint64 from = 1;
+    // receiver id
+    uint64 to = 2; 
+    // leader's current term
+    uint64 term = 3;
+}
+
+// `MsgHeartbeatResponse` is a response to `MsgHeartbeat`. When `MsgHeartbeatResponse`
+// is passed to the leader's Step method, the leader knows which follower
+// responded.
+message MsgHeartbeatResponse {
+    // sender id
+    uint64 from = 1;
+    // receiver id
+    uint64 to = 2;
+    // follower's current term
+    uint64 term = 3;
+    // check whether the leader is stale or not. 
+    // return true if the leader's term is less than peer's
+    bool reject = 4;
 }
