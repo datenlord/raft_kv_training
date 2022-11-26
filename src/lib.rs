@@ -100,3 +100,11 @@
     clippy::panic, // allow debug_assert,panic in production code
     clippy::multiple_crate_versions,// caused by the dependency,can't be fixed
 )]
+
+/// consensus algorithm - raft implementation
+pub mod consensus;
+/// protobuffer
+mod pb;
+
+pub use consensus::*;
+pub use pb::eraftpb::*;

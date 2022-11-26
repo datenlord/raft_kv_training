@@ -57,15 +57,12 @@ message Message {
         MsgHeartbeat heartbeat = 5;
         // `MsgRequestVote` requests votes for election.
         MsgRequestVote request_vote = 6;
-        // `MsgTimeoutNow` send from the leader to the leadership transfer target, to let
-	    // the transfer target timeout immediately and start a new election.
-        MsgTimeoutNow timeout = 7;
         // `MsgAppendResponse' is response to log replication request(`MsgAppend`).
-        MsgAppendResponse append_response = 8;
+        MsgAppendResponse append_response = 7;
         // `MsgHeartbeatResponse` is a response to `MsgHeartbeat`.
-        MsgHeartbeatResponse heartbeat_response = 9;
+        MsgHeartbeatResponse heartbeat_response = 8;
         // `MsgRequestVoteResponse` contains responses from voting request.
-        MsgRequestVoteResponse request_vote_response = 10;
+        MsgRequestVoteResponse request_vote_response = 9;
     }
 }
 
@@ -86,15 +83,6 @@ message MsgHup {
 // the raft struct is set as `tickHeartbeat`, and triggers the leader to
 // send periodic `MsgHeartbeat` messages to its followers. 
 message MsgBeat {
-    // sender id
-    uint64 from = 1;
-    // receiver id
-    uint64 to = 2;
-}
-
-// `MsgTimeoutNow` send from the leader to the leadership transfer target, to let
-// the transfer target timeout immediately and start a new election.
-message MsgTimeoutNow {
     // sender id
     uint64 from = 1;
     // receiver id
