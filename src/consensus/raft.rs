@@ -1,11 +1,9 @@
 #![allow(dead_code)]
-use super::errors::RaftError;
+use crate::RaftError;
+use crate::{config::Config, INVALID_ID};
 use rand::Rng;
 use std::collections::HashMap;
 use std::fmt::Display;
-
-/// Invalid id
-const NONE: u64 = 0;
 
 /// peer state
 #[derive(Debug, PartialEq, Eq)]
@@ -26,55 +24,9 @@ impl Display for State {
     }
 }
 
-/// config definition
-struct Config {
-    /// id is the identity of the local raft. id cannot be 0.
-    id: u64,
-
-    /// peers contains the ids of all nodes (including self) in the raft cluster. It
-    /// should only be set when starting a new raft cluster. Restarting raft from
-    /// previous configuration will panic if peers is set. peer is private and only
-    /// used for testing right now.
-    peers: Vec<u64>,
-
-    /// `election_timeout` is the number of Node.Tick invocations that must pass between
-    /// elections. That is, if a follower does not receive any message from the
-    /// leader of current term before `election_timeout` has elapsed, it will become
-    /// candidate and start an election. `election_timeout` must be greater than
-    /// `heartbeat_timeout`. We suggest `election_timeout` = 10 * `heartbeat_timeout` to avoid
-    /// unnecessary leader switching.
-    election_timeout: u32,
-
-    /// `heartbeat_timeout` is the number of Node.Tick invocations that must pass between
-    /// heartbeats. That is, a leader sends heartbeat messages to maintain its
-    /// leadership every `heartbeat_timeout` ticks.
-    heartbeat_timeout: u32,
-}
-
-impl Config {
-    /// generate a new raft config
-    fn new(id: u64, peers: Vec<u64>, election: u32, heartbeat: u32) -> Result<Self, RaftError> {
-        Self::validate(id, election, heartbeat)?;
-        Ok(Self {
-            id,
-            peers,
-            election_timeout: election,
-            heartbeat_timeout: heartbeat,
-        })
-    }
-
-    /// check if the given config is valid or not
-    fn validate(id: u64, election: u32, heartbeat: u32) -> Result<(), RaftError> {
-        if id == NONE {
-            return Err(RaftError::InvalidConfID);
-        }
-        if heartbeat == 0 {
-            return Err(RaftError::InvalidHeartbeatTimeout);
-        }
-        if election <= heartbeat {
-            return Err(RaftError::InvalidElectionTimeout);
-        }
-        Ok(())
+impl Default for State {
+    fn default() -> Self {
+        Self::Follower
     }
 }
 
@@ -96,43 +48,44 @@ struct Raft {
     votes: HashMap<u64, bool>,
 
     /// heartbeat interval, should send
-    heartbeat_timeout: u32,
+    heartbeat_timeout: usize,
 
     /// baseline of election interval
-    election_timeout: u32,
+    election_timeout: usize,
 
     /// randomize leader election timeout to avoid election livelock
-    random_election_timeout: u32,
+    random_election_timeout: usize,
     /// number of ticks since it reached last heartbeatTimeout.
     /// only leader keeps heartbeatElapsed.
-    heartbeat_elapsed: u32,
+    heartbeat_elapsed: usize,
     /// number of ticks since it reached last electionTimeout
-    election_elapsed: u32,
+    election_elapsed: usize,
 }
 
 impl Raft {
     /// generate a new Raft instance
-    fn new(config: &Config) -> Self {
+    fn new(config: &Config) -> Result<Self, RaftError> {
+        config.validate()?;
         let mut rng = rand::thread_rng();
-        let mut random_election = config.election_timeout;
+        let mut random_election = config.election_tick;
         if let Some(random_timeout) =
-            random_election.checked_add(rng.gen_range::<u32, _>(0..random_election))
+            random_election.checked_add(rng.gen_range::<usize, _>(0..random_election))
         {
             random_election = random_timeout;
         }
-        Self {
+        Ok(Self {
             id: config.id,
             votes: HashMap::new(),
-            heartbeat_timeout: config.heartbeat_timeout,
-            election_timeout: config.election_timeout,
+            heartbeat_timeout: config.heartbeat_tick,
+            election_timeout: config.election_tick,
             state: State::Follower,
             term: 0,
-            lead: NONE,
-            vote: NONE,
+            lead: INVALID_ID,
+            vote: INVALID_ID,
             heartbeat_elapsed: 0,
             election_elapsed: 0,
             random_election_timeout: random_election,
-        }
+        })
     }
 }
 
@@ -153,19 +106,19 @@ mod tests {
         }
     }
 
-    fn new_raft(
-        id: u64,
-        peers: Vec<u64>,
-        election: u32,
-        heartbeat: u32,
-    ) -> Result<Raft, RaftError> {
-        let conf = Config::new(id, peers, election, heartbeat)?;
-        Ok(Raft::new(&conf))
+    fn new_test_config(id: u64, election_tick: usize, heartbeat_tick: usize) -> Config {
+        Config {
+            id,
+            election_tick,
+            heartbeat_tick,
+            ..Default::default()
+        }
     }
 
     #[test]
     fn start_as_follower_2aa() {
-        let r = error_handle(new_raft(1, vec![1, 2, 3], 10, 1));
+        let config = new_test_config(1, 10, 1);
+        let r = error_handle(Raft::new(&config));
         assert_eq!(r.state, State::Follower);
     }
 }
