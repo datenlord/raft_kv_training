@@ -11,6 +11,7 @@ repository = "https://github.com/Phoenix500526/raft_kv"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+getset = "0.1.2"
 prost = "0.9"
 rand = "0.8.5"
 thiserror = "1" 
