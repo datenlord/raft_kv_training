@@ -7,7 +7,7 @@ fn main() {
         "#[allow(missing_docs, clippy::missing_docs_in_private_items)]",
     );
     config.type_attribute(
-        "Entry.data",
+        "Entry.ent_data",
         "#![allow(missing_docs, clippy::missing_docs_in_private_items)]",
     );
     config.type_attribute(
@@ -15,7 +15,7 @@ fn main() {
         "#[allow(missing_docs, clippy::missing_docs_in_private_items)]",
     );
     config.type_attribute(
-        "Message.data",
+        "Message.msg_data",
         "#![allow(missing_docs,clippy::missing_docs_in_private_items)]",
     );
     config.bytes(["."]);
@@ -37,11 +37,11 @@ fn main() {
     for item in [
         "ConfState",
         "Entry",
-        "Entry.data",
+        "Entry.ent_data",
         "EntryNormal",
         "MsgPropose",
         "MsgAppend",
-        "Message.data",
+        "Message.msg_data",
         "Message",
     ] {
         config.type_attribute(item, "#[non_exhaustive]");
@@ -50,11 +50,11 @@ fn main() {
     for item in [
         "ConfState",
         "Entry",
-        "Entry.data",
+        "Entry.ent_data",
         "EntryNormal",
         "MsgPropose",
         "MsgAppend",
-        "Message.data",
+        "Message.msg_data",
         "Message",
     ] {
         config.type_attribute(item, "#[derive(Eq)]");
