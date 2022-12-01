@@ -10,6 +10,9 @@ pub enum RaftError {
     /// Storage relevant errors
     #[error("{0}")]
     Store(#[from] StorageError),
+    /// Some other errors occurred
+    #[error("unknown error {0}")]
+    Others(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl PartialEq for RaftError {
@@ -25,7 +28,7 @@ impl PartialEq for RaftError {
 
 /// An error with the storage
 #[non_exhaustive]
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone, Copy)]
 pub enum StorageError {
     /// Log Unavailable
     #[error("logs from {0} to {1} are unavailable")]
@@ -34,10 +37,6 @@ pub enum StorageError {
     /// Empty Entries
     #[error("empty entries")]
     EmptyEntries(),
-
-    /// Some other errors occurred
-    #[error("unknown error {0}")]
-    Others(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl PartialEq for StorageError {
@@ -77,6 +76,10 @@ mod tests {
             RaftError::Store(StorageError::Unavailable(1, 2)),
             RaftError::Store(StorageError::Unavailable(1, 2))
         );
+        assert_ne!(
+            RaftError::Others(Box::new(StorageError::EmptyEntries())),
+            RaftError::InvalidConfig("hello".to_owned())
+        );
     }
 
     #[test]
@@ -94,10 +97,6 @@ mod tests {
         assert_ne!(
             StorageError::Unavailable(1, 2),
             StorageError::EmptyEntries()
-        );
-        assert_ne!(
-            StorageError::Others(Box::new(StorageError::EmptyEntries())),
-            StorageError::Unavailable(1, 2)
         );
     }
 }

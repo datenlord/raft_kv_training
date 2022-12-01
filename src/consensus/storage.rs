@@ -1,4 +1,4 @@
-use crate::{ConfState, Entry, HardState, RaftError, StorageError};
+use crate::{ConfState, Entry, HardState, RaftError, StorageError, INVALID_INDEX};
 use getset::{Getters, MutGetters, Setters};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -70,18 +70,16 @@ pub trait Storage {
     ///
     /// New created (but not initialized) `Storage` can be considered as truncated at 0 so that 1
     /// will be returned in this case.
-    ///
-    /// # Errors
-    ///
-    /// return `EmptyEntries` if the `self.entries` is empty
-    fn first_index(&self) -> Result<u64, RaftError>;
+    fn first_index(&self) -> u64;
 
     /// The index of the last entry replicated in the `Storage`.
-    ///
+    fn last_index(&self) -> u64;
+
+    /// Store a entry slice into the `Storage`
     /// # Errors
     ///
-    /// return `EmptyEntries` if the `self.entries` is empty
-    fn last_index(&self) -> Result<u64, RaftError>;
+    /// return `RaftError` if the index of the first entry in the `entries`is larger than the `last_index`()
+    fn append(&mut self, ents: &[Entry]) -> Result<(), RaftError>;
 }
 
 /// The Memory Storage Core instance holds the actual state of the storage struct. To access this
@@ -107,18 +105,20 @@ impl MemStorageCore {
     }
 
     /// get the index of the first entry in the `entries`
+    #[allow(clippy::integer_arithmetic)]
     fn first_index(&self) -> u64 {
         match self.entries.first() {
             Some(e) => e.index,
-            None => 1,
+            None => INVALID_INDEX + 1,
         }
     }
 
     /// get the index of the last entry in the `entries`
+    #[allow(clippy::integer_arithmetic)]
     fn last_index(&self) -> u64 {
         match self.entries.last() {
             Some(e) => e.index,
-            None => 0,
+            None => INVALID_INDEX,
         }
     }
 
@@ -146,7 +146,7 @@ impl MemStorageCore {
             let diff = first_entry.index - first_index;
             let diff: usize = diff
                 .try_into()
-                .map_err(|e| RaftError::Store(StorageError::Others(Box::new(e))))?;
+                .map_err(|e| RaftError::Others(Box::new(e)))?;
             {
                 let _drain_res = self.entries.drain(diff..);
             }
@@ -169,7 +169,7 @@ impl MemStorageCore {
         let diff = index - self.entries[0].index;
         let diff: usize = diff
             .try_into()
-            .map_err(|e| RaftError::Store(StorageError::Others(Box::new(e))))?;
+            .map_err(|e| RaftError::Others(Box::new(e)))?;
 
         let term = self.entries[diff].term;
         let hard_state = self.raft_state_mut().hard_state_mut();
@@ -284,23 +284,23 @@ impl Storage for MemStorage {
         let offset = core.entries[0].index;
         let lo = (low - offset)
             .try_into()
-            .map_err(|e| RaftError::Store(StorageError::Others(Box::new(e))))?;
+            .map_err(|e| RaftError::Others(Box::new(e)))?;
         let hi = (high - offset)
             .try_into()
-            .map_err(|e| RaftError::Store(StorageError::Others(Box::new(e))))?;
+            .map_err(|e| RaftError::Others(Box::new(e)))?;
         Ok(core.entries[lo..hi].to_vec())
     }
 
     /// Implements the Storage trait
     #[inline]
-    fn first_index(&self) -> Result<u64, RaftError> {
-        Ok(self.rl().first_index())
+    fn first_index(&self) -> u64 {
+        self.rl().first_index()
     }
 
     /// Implements the Storage trait
     #[inline]
-    fn last_index(&self) -> Result<u64, RaftError> {
-        Ok(self.rl().last_index())
+    fn last_index(&self) -> u64 {
+        self.rl().last_index()
     }
 
     /// Implements the Storage trait
@@ -311,8 +311,14 @@ impl Storage for MemStorage {
         core.has_entry_at(index)?;
         let offset: usize = (index - core.first_index())
             .try_into()
-            .map_err(|e| RaftError::Store(StorageError::Others(Box::new(e))))?;
+            .map_err(|e| RaftError::Others(Box::new(e)))?;
         Ok(core.entries[offset].term)
+    }
+
+    /// Implements the Storage trait
+    #[inline]
+    fn append(&mut self, ents: &[Entry]) -> Result<(), RaftError> {
+        self.wl().append(ents)
     }
 }
 
@@ -383,7 +389,7 @@ mod test {
         let ents = vec![new_entry(1, 4), new_entry(2, 5), new_entry(3, 6)];
         let storage = MemStorage::new();
         storage.wl().entries = ents;
-        assert_eq!(storage.first_index(), Ok(1));
+        assert_eq!(storage.first_index(), 1);
 
         // TODO: considering the compact case
     }
@@ -393,10 +399,10 @@ mod test {
         let ents = vec![new_entry(1, 4), new_entry(2, 5), new_entry(3, 6)];
         let storage = MemStorage::new();
         storage.wl().entries = ents;
-        assert_eq!(storage.last_index(), Ok(3));
+        assert_eq!(storage.last_index(), 3);
         let res = storage.wl().append(&[new_entry(4, 7), new_entry(5, 8)]);
         match res {
-            Ok(_) => assert_eq!(storage.last_index(), Ok(5)),
+            Ok(_) => assert_eq!(storage.last_index(), 5),
             Err(_) => unreachable!(),
         }
     }
