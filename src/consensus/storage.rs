@@ -99,7 +99,7 @@ impl MemStorageCore {
     /// check whether there is an entry at the given index of `entries`
     #[inline]
     fn has_entry_at(&self, index: u64) -> Result<(), RaftError> {
-        let last_idx = self.last_index()?;
+        let last_idx = self.last_index();
         if index > last_idx {
             return Err(RaftError::Store(StorageError::Unavailable(last_idx, index)));
         }
@@ -107,18 +107,18 @@ impl MemStorageCore {
     }
 
     /// get the index of the first entry in the `entries`
-    fn first_index(&self) -> Result<u64, RaftError> {
+    fn first_index(&self) -> u64 {
         match self.entries.first() {
-            Some(e) => Ok(e.index),
-            None => Err(RaftError::Store(StorageError::EmptyEntries())),
+            Some(e) => e.index,
+            None => 1,
         }
     }
 
     /// get the index of the last entry in the `entries`
-    fn last_index(&self) -> Result<u64, RaftError> {
+    fn last_index(&self) -> u64 {
         match self.entries.last() {
-            Some(e) => Ok(e.index),
-            None => Err(RaftError::Store(StorageError::EmptyEntries())),
+            Some(e) => e.index,
+            None => 0,
         }
     }
 
@@ -130,11 +130,11 @@ impl MemStorageCore {
     #[inline]
     #[allow(clippy::integer_arithmetic)]
     pub fn append(&mut self, ents: &[Entry]) -> Result<(), RaftError> {
-        if let Some(first_entry) = ents.get(0) {
-            let first_index = self.first_index()?;
+        if let Some(first_entry) = ents.first() {
+            let first_index = self.first_index();
             // TODO: consider raft log compacted
 
-            let last_index = self.last_index()?;
+            let last_index = self.last_index();
             if last_index + 1 < first_entry.index {
                 return Err(RaftError::Store(StorageError::Unavailable(
                     last_index,
@@ -273,8 +273,8 @@ impl Storage for MemStorage {
     #[inline]
     fn entries(&self, low: u64, high: u64) -> Result<Vec<Entry>, RaftError> {
         let core = self.wl();
-        let last_idx = core.last_index()?;
-        if high > last_idx {
+        let last_idx = core.last_index();
+        if high > last_idx + 1 {
             return Err(RaftError::Store(StorageError::Unavailable(
                 last_idx + 1,
                 high,
@@ -294,13 +294,13 @@ impl Storage for MemStorage {
     /// Implements the Storage trait
     #[inline]
     fn first_index(&self) -> Result<u64, RaftError> {
-        self.rl().first_index()
+        Ok(self.rl().first_index())
     }
 
     /// Implements the Storage trait
     #[inline]
     fn last_index(&self) -> Result<u64, RaftError> {
-        self.rl().last_index()
+        Ok(self.rl().last_index())
     }
 
     /// Implements the Storage trait
@@ -309,7 +309,7 @@ impl Storage for MemStorage {
     fn term(&self, index: u64) -> Result<u64, RaftError> {
         let core = self.rl();
         core.has_entry_at(index)?;
-        let offset: usize = (index - core.first_index()?)
+        let offset: usize = (index - core.first_index())
             .try_into()
             .map_err(|e| RaftError::Store(StorageError::Others(Box::new(e))))?;
         Ok(core.entries[offset].term)
@@ -353,7 +353,30 @@ mod test {
     }
 
     #[test]
-    fn test_storage_entries() {}
+    fn test_storage_entries() {
+        let ents = vec![
+            new_entry(1, 1),
+            new_entry(2, 2),
+            new_entry(3, 3),
+            new_entry(4, 4),
+        ];
+        let tests = vec![
+            (2, 6, Err(RaftError::Store(StorageError::Unavailable(5, 6)))),
+            (2, 3, Ok(vec![new_entry(2, 2)])),
+            (3, 4, Ok(vec![new_entry(3, 3)])),
+            (
+                2,
+                5,
+                Ok(vec![new_entry(2, 2), new_entry(3, 3), new_entry(4, 4)]),
+            ),
+        ];
+        let storage = MemStorage::new();
+        storage.wl().entries = ents;
+        for (low, high, wentries) in tests {
+            let e = storage.entries(low, high);
+            assert_eq!(e, wentries);
+        }
+    }
 
     #[test]
     fn test_storage_first_index() {

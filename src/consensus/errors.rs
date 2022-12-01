@@ -28,7 +28,7 @@ impl PartialEq for RaftError {
 #[derive(Debug, Error)]
 pub enum StorageError {
     /// Log Unavailable
-    #[error("log unavailable: last index: {0}, target index: {1}")]
+    #[error("logs from {0} to {1} are unavailable")]
     Unavailable(u64, u64),
 
     /// Empty Entries
