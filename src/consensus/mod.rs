@@ -8,6 +8,7 @@ pub mod raft;
 pub mod storage;
 
 pub use errors::*;
+pub use storage::Storage;
 
 /// A constant represents invalid id of raft.
 pub const INVALID_ID: u64 = 0;
