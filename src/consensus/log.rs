@@ -85,7 +85,8 @@ impl<T: Storage> RaftLog<T> {
     ///
     /// # Errors
     ///
-    ///
+    /// return `IndexOutOfBounds` if the idx is out of the range
+    /// [`unstable_first_index`, `unstable_last_index`] or [`stable_first_index`, `stable_last_index`]
     #[allow(clippy::indexing_slicing, clippy::integer_arithmetic)]
     #[inline]
     pub fn term(&self, idx: u64) -> Result<u64, RaftError> {
@@ -223,11 +224,12 @@ impl<T: Storage> RaftLog<T> {
         None
     }
 
-    /// Clears the unstable entries and moves the stable offset up to the last index, if there is any
+    /// Store the unstable entries to the given index, if there is any
     ///
     /// # Errors
     ///
-    ///
+    /// return `IndexOutOfBounds` if idx is out of `unstable_logs`'s range.
+    /// return `Unconsistent` if idx and term are not matched.
     #[allow(clippy::integer_arithmetic)]
     #[inline]
     pub fn stable_entries(&mut self, idx: u64, term: u64) -> Result<(), RaftError> {
