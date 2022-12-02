@@ -52,7 +52,8 @@ pub trait Storage {
     ///
     /// # Errors
     ///
-    /// Panics if `high` is higher than `Storage::last_index(&self) + 1`.
+    /// Return `Unavailable` if `high` is higher than `Storage::last_index(&self) + 1`.
+    /// Return `Others` if type conversion is failed
     fn entries(&self, low: u64, high: u64) -> Result<Vec<Entry>, RaftError>;
 
     /// Returns the term of entry idx, which must be in the range
@@ -105,16 +106,17 @@ impl MemStorageCore {
     }
 
     /// get the index of the first entry in the `entries`
-    #[allow(clippy::integer_arithmetic)]
     fn first_index(&self) -> u64 {
+        /// When `self.entries` is empty, `FIRST_INDEX` represents the first valid entry index
+        /// `FIRST_INDEX` = `INVALID_INDEX` + 1
+        const FIRST_INDEX: u64 = 1;
         match self.entries.first() {
             Some(e) => e.index,
-            None => INVALID_INDEX + 1,
+            None => FIRST_INDEX,
         }
     }
 
     /// get the index of the last entry in the `entries`
-    #[allow(clippy::integer_arithmetic)]
     fn last_index(&self) -> u64 {
         match self.entries.last() {
             Some(e) => e.index,
@@ -165,13 +167,13 @@ impl MemStorageCore {
     #[allow(clippy::integer_arithmetic, clippy::indexing_slicing)]
     pub fn commit_to(&mut self, index: u64) -> Result<(), RaftError> {
         self.has_entry_at(index)?;
-
-        let diff = index - self.entries[0].index;
-        let diff: usize = diff
+        // It's OK to allow `indexing_slicing` in that the previous `has_entry_at` has provided
+        // that the zero and `offset` is safe to be used as a index of `self.entries`.
+        let offset: usize = (index - self.first_index())
             .try_into()
             .map_err(|e| RaftError::Others(Box::new(e)))?;
 
-        let term = self.entries[diff].term;
+        let term = self.entries[offset].term;
         let hard_state = self.raft_state_mut().hard_state_mut();
         hard_state.commit = index;
         hard_state.term = term;
