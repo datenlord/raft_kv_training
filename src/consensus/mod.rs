@@ -2,6 +2,8 @@
 pub mod config;
 /// raft error module
 pub mod errors;
+/// log module
+pub mod log;
 /// raft module
 pub mod raft;
 /// storage module
