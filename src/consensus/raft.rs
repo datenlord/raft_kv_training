@@ -6,8 +6,9 @@ use std::collections::HashMap;
 use std::fmt::Display;
 
 /// peer state
-#[derive(Debug, PartialEq, Eq)]
-enum State {
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum State {
     /// Followers handle requests passively. The most of servers are in this state.
     Follower,
     /// Candidates are used to elect a new leader. Candidate is a temporary state
@@ -19,19 +20,22 @@ enum State {
 }
 
 impl Display for State {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
 impl Default for State {
+    #[inline]
     fn default() -> Self {
         Self::Follower
     }
 }
 
 /// raft node definition
-struct Raft {
+#[derive(Debug)]
+pub struct Raft {
     /// raft id
     id: u64,
     /// current term
@@ -39,7 +43,7 @@ struct Raft {
     /// which candidate is this peer to voted for
     vote: u64,
     /// this peer's role
-    state: State,
+    pub state: State,
 
     /// the leader id
     lead: u64,
@@ -64,7 +68,13 @@ struct Raft {
 
 impl Raft {
     /// generate a new Raft instance
-    fn new(config: &Config) -> Result<Self, RaftError> {
+    ///
+    /// # Errors
+    ///
+    /// return `RaftError::InvalidConfig` when the given config is invalid.
+    /// see `Config::validate()` in config.rs for more information
+    #[inline]
+    pub fn new(config: &Config) -> Result<Self, RaftError> {
         config.validate()?;
         let mut rng = rand::thread_rng();
         let mut random_election = config.election_tick;
@@ -86,39 +96,5 @@ impl Raft {
             election_elapsed: 0,
             random_election_timeout: random_election,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fmt::Debug;
-
-    fn error_handle<T, E>(res: Result<T, E>) -> T
-    where
-        E: Debug,
-    {
-        match res {
-            Ok(t) => t,
-            Err(e) => {
-                unreachable!("{:?}", e)
-            }
-        }
-    }
-
-    fn new_test_config(id: u64, election_tick: usize, heartbeat_tick: usize) -> Config {
-        Config {
-            id,
-            election_tick,
-            heartbeat_tick,
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn start_as_follower_2aa() {
-        let config = new_test_config(1, 10, 1);
-        let r = error_handle(Raft::new(&config));
-        assert_eq!(r.state, State::Follower);
     }
 }
