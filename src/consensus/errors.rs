@@ -91,45 +91,4 @@ mod tests {
             RaftError::InvalidConfig("hello".to_owned())
         );
     }
-
-    #[test]
-    fn test_storage_error_equal() {
-        assert_eq!(
-            StorageError::Unavailable(1, 2),
-            StorageError::Unavailable(1, 2)
-        );
-
-        assert_ne!(
-            StorageError::Unavailable(1, 2),
-            StorageError::Unavailable(3, 4)
-        );
-
-        assert_ne!(
-            StorageError::Unavailable(1, 2),
-            StorageError::EmptyEntries()
-        );
-    }
-
-    #[test]
-    fn test_log_error_equal() {
-        assert_eq!(
-            LogError::IndexOutOfBounds(1, 2),
-            LogError::IndexOutOfBounds(1, 2),
-        );
-
-        assert_ne!(
-            LogError::IndexOutOfBounds(1, 2),
-            LogError::IndexOutOfBounds(3, 4)
-        );
-
-        assert_eq!(
-            LogError::TruncatedStableLog(1, 2),
-            LogError::TruncatedStableLog(1, 2)
-        );
-
-        assert_ne!(
-            LogError::TruncatedStableLog(1, 2),
-            LogError::TruncatedStableLog(3, 4)
-        );
-    }
 }
