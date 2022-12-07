@@ -37,7 +37,9 @@ pub enum StorageError {
     /// Log Unavailable
     #[error("logs from {0} to {1} are unavailable")]
     Unavailable(u64, u64),
-
+    /// Invalid stable log index
+    #[error("stable log index is invalid: {0}")]
+    InvalidIndex(u64),
     /// Empty Entries
     #[error("empty entries")]
     EmptyEntries(),
@@ -47,6 +49,9 @@ pub enum StorageError {
 #[non_exhaustive]
 #[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
 pub enum LogError {
+    /// Invalid unstable log Index
+    #[error("unstable log index is invalid: {0}")]
+    InvalidIndex(u64),
     /// Log index is out of range
     #[error("index must be less than the last log index: index = {0}, last_index = {1}")]
     IndexOutOfBounds(u64, u64),
