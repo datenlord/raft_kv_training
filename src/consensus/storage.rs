@@ -186,6 +186,7 @@ impl MemStorageCore {
 /// A real `Storage` should save both raft logs and applied data. However `MemStorage` only
 /// contains raft logs. So you can call `MemStorage::append` to persist new received unstable raft
 /// logs and then access them with `Storage` APIs.
+#[allow(clippy::module_name_repetitions)]
 #[derive(Clone, Default, Debug)]
 pub struct MemStorage {
     /// The core of the storage
