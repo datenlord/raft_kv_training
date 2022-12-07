@@ -98,6 +98,9 @@ impl MemStorageCore {
     /// check whether there is an entry at the given index of `entries`
     #[inline]
     fn has_entry_at(&self, index: u64) -> Result<(), RaftError> {
+        if index == INVALID_INDEX {
+            return Err(RaftError::Store(StorageError::InvalidIndex(index)));
+        }
         let last_idx = self.last_index();
         if index > last_idx {
             return Err(RaftError::Store(StorageError::Unavailable(last_idx, index)));
@@ -450,7 +453,12 @@ mod test {
     #[test]
     fn test_storage_commit_to_and_set_conf_state() {
         let ents = vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)];
-        let tests: Vec<(u64, Option<HardState>)> = vec![
+        let tests: Vec<(u64, Option<HardState>, Result<(), RaftError>)> = vec![
+            (
+                0,
+                None,
+                Err(RaftError::Store(StorageError::InvalidIndex(0))),
+            ),
             (
                 2,
                 Some(HardState {
@@ -458,21 +466,22 @@ mod test {
                     commit: 2,
                     vote: 0,
                 }),
+                Ok(()),
             ),
-            (5, None),
+            (
+                5,
+                None,
+                Err(RaftError::Store(StorageError::Unavailable(3, 5))),
+            ),
         ];
 
-        for (idx, hs) in tests {
+        for (idx, hs, wres) in tests {
             let storage = MemStorage::new();
             storage.wl().entries = ents.clone();
             let res = storage.wl().commit_to(idx);
-            match res {
-                Ok(_) => {
-                    if let Some(hs) = hs {
-                        assert_eq!(storage.rl().raft_state.hard_state, hs);
-                    }
-                }
-                Err(e) => assert_eq!(e, RaftError::Store(StorageError::Unavailable(3, idx))),
+            assert_eq!(res, wres);
+            if let Some(hs) = hs {
+                assert_eq!(storage.rl().raft_state.hard_state, hs);
             }
         }
     }
