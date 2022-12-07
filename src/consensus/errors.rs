@@ -32,7 +32,7 @@ impl PartialEq for RaftError {
 
 /// An error with the storage
 #[non_exhaustive]
-#[derive(Debug, Error, Clone, Copy)]
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum StorageError {
     /// Log Unavailable
     #[error("logs from {0} to {1} are unavailable")]
@@ -41,20 +41,6 @@ pub enum StorageError {
     /// Empty Entries
     #[error("empty entries")]
     EmptyEntries(),
-}
-
-impl PartialEq for StorageError {
-    #[allow(clippy::match_same_arms)]
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (&StorageError::Unavailable(i1, i2), &StorageError::Unavailable(i3, i4)) => {
-                i1 == i3 && i2 == i4
-            }
-            (&StorageError::EmptyEntries(), &StorageError::EmptyEntries()) => true,
-            _ => false,
-        }
-    }
 }
 
 /// An error with the `RaftLog`
