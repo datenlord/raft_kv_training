@@ -264,13 +264,11 @@ impl MemStorage {
 }
 
 impl Storage for MemStorage {
-    /// Implements the Storage trait
     #[inline]
     fn initial_state(&self) -> RaftState {
         self.rl().raft_state.clone()
     }
 
-    /// Implements the Storage trait
     #[allow(clippy::integer_arithmetic, clippy::indexing_slicing)]
     #[inline]
     fn entries(&self, low: u64, high: u64) -> Result<Vec<Entry>, RaftError> {
@@ -293,19 +291,16 @@ impl Storage for MemStorage {
         Ok(core.entries[lo..hi].to_vec())
     }
 
-    /// Implements the Storage trait
     #[inline]
     fn first_index(&self) -> u64 {
         self.rl().first_index()
     }
 
-    /// Implements the Storage trait
     #[inline]
     fn last_index(&self) -> u64 {
         self.rl().last_index()
     }
 
-    /// Implements the Storage trait
     #[allow(clippy::indexing_slicing, clippy::integer_arithmetic)]
     #[inline]
     fn term(&self, index: u64) -> Result<u64, RaftError> {
@@ -317,7 +312,6 @@ impl Storage for MemStorage {
         Ok(core.entries[offset].term)
     }
 
-    /// Implements the Storage trait
     #[inline]
     fn append(&mut self, ents: &[Entry]) -> Result<(), RaftError> {
         self.wl().append(ents)
