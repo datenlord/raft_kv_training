@@ -179,24 +179,6 @@ impl MemStorageCore {
         hard_state.term = term;
         Ok(())
     }
-
-    /// Commit to `idx` and set configuration to the given states. Only used for tests.
-    ///
-    /// # Errors
-    ///
-    /// return `RaftError` if there is no such entry in raft logs.
-    #[inline]
-    pub fn commit_to_and_set_conf_states(
-        &mut self,
-        idx: u64,
-        cs: Option<ConfState>,
-    ) -> Result<(), RaftError> {
-        self.commit_to(idx)?;
-        if let Some(cs) = cs {
-            let _res = self.raft_state.set_conf_state(cs);
-        }
-        Ok(())
-    }
 }
 
 /// `MemStorage` is a thread-safe but incomplete implementation of `Storage`, mainly for tests.
@@ -238,7 +220,7 @@ impl MemStorage {
     ///
     /// You should use the same input to initialize all nodes.
     #[inline]
-    pub fn initialize_with_conf_state<T>(&self, conf_state: T)
+    fn initialize_with_conf_state<T>(&self, conf_state: T)
     where
         ConfState: From<T>,
     {
