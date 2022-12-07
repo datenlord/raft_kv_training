@@ -99,7 +99,6 @@
 #![allow(
     clippy::panic, // allow debug_assert,panic in production code
     clippy::multiple_crate_versions,// caused by the dependency,can't be fixed
-    clippy::module_name_repetitions, // allow type names to be prefixed or suffixed by the containing module’s name.
 )]
 
 /// consensus algorithm - raft implementation

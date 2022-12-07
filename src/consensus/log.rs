@@ -3,6 +3,7 @@ use getset::{Getters, MutGetters};
 use std::fmt::Display;
 
 /// Raft log implementation
+#[allow(clippy::module_name_repetitions)]
 #[derive(Debug, Getters, MutGetters)]
 #[non_exhaustive]
 pub struct RaftLog<T: Storage> {
