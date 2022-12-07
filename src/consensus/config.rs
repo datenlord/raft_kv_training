@@ -7,17 +7,17 @@ pub struct Config {
     /// id is the identity of the local raft. id cannot be 0.
     pub id: u64,
 
-    /// `election_timeout` is the number of Node.Tick invocations that must pass between
+    /// `election_tick` is the number of Node.Tick invocations that must pass between
     /// elections. That is, if a follower does not receive any message from the
-    /// leader of current term before `election_timeout` has elapsed, it will become
-    /// candidate and start an election. `election_timeout` must be greater than
-    /// `heartbeat_timeout`. We suggest `election_timeout` = 10 * `heartbeat_timeout` to avoid
+    /// leader of current term before `election_tick` has elapsed, it will become
+    /// candidate and start an election. `election_tick` must be greater than
+    /// `heartbeat_tick`. We suggest `election_tick` = 10 * `heartbeat_tick` to avoid
     /// unnecessary leader switching.
     pub election_tick: usize,
 
-    /// `heartbeat_timeout` is the number of Node.Tick invocations that must pass between
+    /// `heartbeat_tick` is the number of Node.Tick invocations that must pass between
     /// heartbeats. That is, a leader sends heartbeat messages to maintain its
-    /// leadership every `heartbeat_timeout` ticks.
+    /// leadership every `heartbeat_tick` ticks.
     pub heartbeat_tick: usize,
 
     /// Applied is the last applied index. It should only be set when restarting
