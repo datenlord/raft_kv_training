@@ -233,7 +233,7 @@ impl<T: Storage> RaftLog<T> {
     /// return `Unconsistent` if idx and term are not matched.
     #[allow(clippy::integer_arithmetic)]
     #[inline]
-    pub fn stable_entries(&mut self, idx: u64, term: u64) -> Result<(), RaftError> {
+    pub fn persist_log_entries(&mut self, idx: u64) -> Result<(), RaftError> {
         let unstable_first_index = self.unstable_first_index();
         let unstable_last_index = self.unstable_last_index();
         if idx < unstable_first_index {
@@ -248,12 +248,7 @@ impl<T: Storage> RaftLog<T> {
                 idx,
             )));
         }
-        let idx_term = self.term(idx)?;
-        if idx_term != term {
-            return Err(RaftError::Log(LogError::Unconsistent(
-                idx, term, idx, idx_term,
-            )));
-        }
+
         // unstable_first_index <= idx <= unstable_last_index, so there's no need to worry about overflow
         let offset: usize = (idx - unstable_first_index)
             .try_into()
@@ -400,19 +395,17 @@ mod tests {
     }
 
     #[test]
-    fn test_stable_entries() {
+    fn test_persist_logentries() {
         let tests = vec![
             (
                 vec![new_entry(1, 1), new_entry(2, 2)],
                 1,
-                1,
                 Ok(()),
                 vec![new_entry(2, 2)],
             ),
-            (vec![new_entry(1, 1), new_entry(2, 2)], 2, 2, Ok(()), vec![]),
+            (vec![new_entry(1, 1), new_entry(2, 2)], 2, Ok(()), vec![]),
             (
                 vec![],
-                1,
                 1,
                 Err(RaftError::Log(LogError::IndexOutOfBounds(0, 1))),
                 vec![],
@@ -420,18 +413,17 @@ mod tests {
             (
                 vec![new_entry(1, 1), new_entry(2, 2)],
                 1,
-                2,
-                Err(RaftError::Log(LogError::Unconsistent(1, 2, 1, 1))),
-                vec![new_entry(1, 1), new_entry(2, 2)],
+                Ok(()),
+                vec![new_entry(2, 2)],
             ),
         ];
 
-        for (ents, idx, term, wres, unstable_logs) in tests {
+        for (ents, idx, wres, unstable_logs) in tests {
             let storage = MemStorage::new();
             let mut raft_log = RaftLog::new(storage);
             let _res = raft_log.append(&ents).unwrap();
             assert_eq!(raft_log.unstable_logs, ents);
-            let res = raft_log.stable_entries(idx, term);
+            let res = raft_log.persist_log_entries(idx);
             result_eq!(res, wres);
             assert_eq!(raft_log.unstable_logs, unstable_logs);
         }
