@@ -268,7 +268,7 @@ impl<T: Storage> RaftLog<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{storage::MemStorage, Entry};
+    use crate::{result_eq, storage::MemStorage, Entry};
     fn new_entry(index: u64, term: u64) -> Entry {
         Entry {
             term,
@@ -328,7 +328,7 @@ mod tests {
             raft_log.commit_to(2).unwrap();
 
             let res = raft_log.append(&entries);
-            assert_eq!(res, wres);
+            result_eq!(res, wres);
         }
     }
 
@@ -337,10 +337,10 @@ mod tests {
         let store = MemStorage::new();
         let mut raft_log = RaftLog::new(store);
         let res = raft_log.last_term();
-        assert_eq!(res, Err(RaftError::Log(LogError::EmptyUnstableLog())));
+        result_eq!(res, Err(RaftError::Log(LogError::EmptyUnstableLog())));
         raft_log.unstable_logs = vec![new_entry(1, 2), new_entry(2, 3), new_entry(3, 4)];
-        assert_eq!(raft_log.term(2), Ok(3));
-        assert_eq!(
+        result_eq!(raft_log.term(2), Ok(3));
+        result_eq!(
             raft_log.term(100),
             Err(RaftError::Log(LogError::IndexOutOfBounds(100, 3)))
         )
@@ -432,7 +432,7 @@ mod tests {
             let _res = raft_log.append(&ents).unwrap();
             assert_eq!(raft_log.unstable_logs, ents);
             let res = raft_log.stable_entries(idx, term);
-            assert_eq!(res, wres);
+            result_eq!(res, wres);
             assert_eq!(raft_log.unstable_logs, unstable_logs);
         }
     }

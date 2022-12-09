@@ -18,21 +18,9 @@ pub enum RaftError {
     Others(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
-impl PartialEq for RaftError {
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (&RaftError::Store(ref e1), &RaftError::Store(ref e2)) => e1 == e2,
-            (&RaftError::InvalidConfig(ref e1), &RaftError::InvalidConfig(ref e2)) => e1 == e2,
-            (&RaftError::Log(ref e1), &RaftError::Log(ref e2)) => e1 == e2,
-            _ => false,
-        }
-    }
-}
-
 /// An error with the storage
 #[non_exhaustive]
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Error, Clone, Copy)]
 pub enum StorageError {
     /// Log Unavailable
     #[error("logs from {0} to {1} are unavailable")]
@@ -47,7 +35,7 @@ pub enum StorageError {
 
 /// An error with the `RaftLog`
 #[non_exhaustive]
-#[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Error, Clone, Copy)]
 pub enum LogError {
     /// Invalid unstable log Index
     #[error("unstable log index is invalid: {0}")]
@@ -68,32 +56,187 @@ pub enum LogError {
     Unconsistent(u64, u64, u64, u64),
 }
 
+/// A macro
+#[macro_export]
+macro_rules! result_match {
+    ($lhs: expr, $rhs: expr) => {
+        match ($lhs, $rhs) {
+            (Ok(l), Ok(r)) => l == r,
+            (Err(l), Err(r)) => match (l, r) {
+                (
+                    $crate::errors::RaftError::InvalidConfig(l),
+                    $crate::errors::RaftError::InvalidConfig(r),
+                ) => l == r,
+                ($crate::errors::RaftError::Store(l), $crate::errors::RaftError::Store(r)) => {
+                    match (l, r) {
+                        (
+                            $crate::errors::StorageError::InvalidIndex(l),
+                            $crate::errors::StorageError::InvalidIndex(r),
+                        ) => l == r,
+                        (
+                            $crate::errors::StorageError::EmptyEntries(),
+                            $crate::errors::StorageError::EmptyEntries(),
+                        ) => true,
+                        (
+                            $crate::errors::StorageError::Unavailable(l1, l2),
+                            $crate::errors::StorageError::Unavailable(r1, r2),
+                        ) => l1 == r1 && l2 == r2,
+                        _ => false,
+                    }
+                }
+                ($crate::errors::RaftError::Log(l), $crate::errors::RaftError::Log(r)) => {
+                    match (l, r) {
+                        (
+                            $crate::errors::LogError::EmptyUnstableLog(),
+                            $crate::errors::LogError::EmptyUnstableLog(),
+                        ) => true,
+                        (
+                            $crate::errors::LogError::InvalidIndex(l),
+                            $crate::errors::LogError::InvalidIndex(r),
+                        ) => l == r,
+                        (
+                            $crate::errors::LogError::IndexOutOfBounds(l1, l2),
+                            $crate::errors::LogError::IndexOutOfBounds(r1, r2),
+                        ) => l1 == r1 && l2 == r2,
+                        (
+                            $crate::errors::LogError::Unconsistent(l1, l2, l3, l4),
+                            $crate::errors::LogError::Unconsistent(r1, r2, r3, r4),
+                        ) => l1 == r1 && l2 == r2 && l3 == r3 && l4 == r4,
+                        (
+                            $crate::errors::LogError::TruncatedStableLog(l1, l2),
+                            $crate::errors::LogError::TruncatedStableLog(r1, r2),
+                        ) => l1 == r1 && l2 == r2,
+                        _ => false,
+                    }
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    };
+}
+
+/// `result_eq` asserts that two given result are equal
+#[macro_export]
+macro_rules! result_eq {
+    ($lhs: expr, $rhs: expr) => {
+        std::assert!(
+            $crate::result_match!($lhs, $rhs)
+        )
+    };
+    ($lhs: expr, $rhs: expr, $($arg:tt)+) => {
+        std::assert!($crate::result_match!($lhs, $rhs), "{}", std::format_args!($($arg)+))
+    }
+}
+
+/// `result_ne` asserts that two given result are equal
+#[macro_export]
+macro_rules! result_ne {
+    ($lhs: expr, $rhs: expr) => {
+        std::assert!(!$crate::result_match!($lhs, $rhs))
+    };
+    ($lhs: expr, $rhs: expr, $($arg:tt)+) => {
+        std::assert!($crate::result_match!($lhs, $rhs), "{}", std::format_args!($($arg)+))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn error_generator(err: Option<RaftError>) -> Result<usize, RaftError> {
+        if let Some(e) = err {
+            Err(e)
+        } else {
+            Ok(42)
+        }
+    }
+
     #[test]
-    fn test_raft_error_equal() {
-        assert_eq!(
-            RaftError::InvalidConfig("Invalid config ID".to_owned()),
-            RaftError::InvalidConfig("Invalid config ID".to_owned())
+    fn test_raft_error_match() {
+        result_eq!(
+            error_generator(Some(RaftError::InvalidConfig("hello".to_owned()))),
+            error_generator(Some(RaftError::InvalidConfig("hello".to_owned())))
         );
 
-        assert_ne!(
-            RaftError::InvalidConfig("Invalid config ID".to_owned()),
-            RaftError::InvalidConfig("Heartbeat timeout must be greater than 0".to_owned())
+        result_ne!(
+            error_generator(Some(RaftError::InvalidConfig("hello".to_owned()))),
+            error_generator(Some(RaftError::InvalidConfig("world".to_owned())))
         );
-        assert_ne!(
-            RaftError::Store(StorageError::EmptyEntries()),
-            RaftError::Store(StorageError::Unavailable(1, 2))
+
+        result_eq!(
+            error_generator(Some(RaftError::Store(StorageError::Unavailable(21, 42)))),
+            error_generator(Some(RaftError::Store(StorageError::Unavailable(21, 42))))
         );
-        assert_eq!(
-            RaftError::Store(StorageError::Unavailable(1, 2)),
-            RaftError::Store(StorageError::Unavailable(1, 2))
+
+        result_ne!(
+            error_generator(Some(RaftError::Store(StorageError::Unavailable(21, 42)))),
+            error_generator(Some(RaftError::Store(StorageError::Unavailable(20, 42))))
         );
-        assert_ne!(
-            RaftError::Others(Box::new(StorageError::EmptyEntries())),
-            RaftError::InvalidConfig("hello".to_owned())
+
+        result_eq!(
+            error_generator(Some(RaftError::Store(StorageError::InvalidIndex(42)))),
+            error_generator(Some(RaftError::Store(StorageError::InvalidIndex(42))))
+        );
+
+        result_ne!(
+            error_generator(Some(RaftError::Store(StorageError::InvalidIndex(42)))),
+            error_generator(Some(RaftError::Store(StorageError::InvalidIndex(21))))
+        );
+
+        result_eq!(
+            error_generator(Some(RaftError::Store(StorageError::EmptyEntries()))),
+            error_generator(Some(RaftError::Store(StorageError::EmptyEntries())))
+        );
+
+        result_eq!(
+            error_generator(Some(RaftError::Log(LogError::InvalidIndex(42)))),
+            error_generator(Some(RaftError::Log(LogError::InvalidIndex(42))))
+        );
+
+        result_ne!(
+            error_generator(Some(RaftError::Log(LogError::InvalidIndex(42)))),
+            error_generator(Some(RaftError::Log(LogError::InvalidIndex(21))))
+        );
+
+        result_eq!(
+            error_generator(Some(RaftError::Log(LogError::IndexOutOfBounds(21, 42)))),
+            error_generator(Some(RaftError::Log(LogError::IndexOutOfBounds(21, 42))))
+        );
+
+        result_ne!(
+            error_generator(Some(RaftError::Log(LogError::IndexOutOfBounds(21, 42)))),
+            error_generator(Some(RaftError::Log(LogError::IndexOutOfBounds(11, 21))))
+        );
+
+        result_eq!(
+            error_generator(Some(RaftError::Log(LogError::TruncatedStableLog(21, 42)))),
+            error_generator(Some(RaftError::Log(LogError::TruncatedStableLog(21, 42))))
+        );
+
+        result_ne!(
+            error_generator(Some(RaftError::Log(LogError::TruncatedStableLog(21, 42)))),
+            error_generator(Some(RaftError::Log(LogError::TruncatedStableLog(11, 21))))
+        );
+
+        result_eq!(
+            error_generator(Some(RaftError::Log(LogError::Unconsistent(1, 2, 3, 4)))),
+            error_generator(Some(RaftError::Log(LogError::Unconsistent(1, 2, 3, 4))))
+        );
+
+        result_ne!(
+            error_generator(Some(RaftError::Log(LogError::Unconsistent(1, 2, 3, 4)))),
+            error_generator(Some(RaftError::Log(LogError::Unconsistent(5, 2, 3, 4))))
+        );
+
+        result_ne!(
+            error_generator(Some(RaftError::Log(LogError::InvalidIndex(42)))),
+            error_generator(Some(RaftError::Store(StorageError::InvalidIndex(21))))
+        );
+
+        result_ne!(
+            error_generator(Some(RaftError::Log(LogError::EmptyUnstableLog()))),
+            error_generator(Some(RaftError::Store(StorageError::EmptyEntries())))
         );
     }
 }

@@ -306,7 +306,7 @@ impl Storage for MemStorage {
 
 #[cfg(test)]
 mod test {
-    use crate::{Entry, HardState, RaftError, StorageError};
+    use crate::{result_eq, Entry, HardState, RaftError, StorageError};
 
     use super::{MemStorage, Storage};
 
@@ -336,7 +336,7 @@ mod test {
 
         for (idx, wterm) in tests {
             let t = storage.term(idx);
-            assert_eq!(t, wterm);
+            result_eq!(t, wterm);
         }
     }
 
@@ -362,7 +362,7 @@ mod test {
         storage.wl().entries = ents;
         for (low, high, wentries) in tests {
             let e = storage.entries(low, high);
-            assert_eq!(e, wentries);
+            result_eq!(e, wentries);
         }
     }
 
@@ -400,6 +400,7 @@ mod test {
                     new_entry(5, 7),
                     new_entry(6, 8),
                 ],
+                Ok(()),
                 Some(vec![
                     new_entry(1, 2),
                     new_entry(2, 2),
@@ -412,6 +413,7 @@ mod test {
             // direct append
             (
                 vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
+                Ok(()),
                 Some(vec![
                     new_entry(1, 2),
                     new_entry(2, 2),
@@ -424,28 +426,24 @@ mod test {
             // append entries whose index is greater than the last_index is not allowed
             (
                 vec![new_entry(7, 3), new_entry(8, 3), new_entry(9, 5)],
+                Err(RaftError::Store(crate::StorageError::Unavailable(3, 7))),
                 None,
             ),
             // truncate the existing entries and append
             (
                 vec![new_entry(2, 3)],
+                Ok(()),
                 Some(vec![new_entry(1, 2), new_entry(2, 3)]),
             ),
         ];
 
-        for (entries, wentries) in tests {
+        for (entries, wres, wentries) in tests {
             let storage = MemStorage::new();
             storage.wl().entries = ents.clone();
             let res = storage.wl().append(&entries);
-            match res {
-                Ok(_) => {
-                    if let Some(wentries) = wentries {
-                        assert_eq!(storage.wl().entries, wentries);
-                    }
-                }
-                Err(e) => {
-                    assert_eq!(e, RaftError::Store(crate::StorageError::Unavailable(3, 7)));
-                }
+            result_eq!(res, wres);
+            if let Some(wentries) = wentries {
+                assert_eq!(storage.wl().entries, wentries);
             }
         }
     }
@@ -479,7 +477,7 @@ mod test {
             let storage = MemStorage::new();
             storage.wl().entries = ents.clone();
             let res = storage.wl().commit_to(idx);
-            assert_eq!(res, wres);
+            result_eq!(res, wres);
             if let Some(hs) = hs {
                 assert_eq!(storage.rl().raft_state.hard_state, hs);
             }
