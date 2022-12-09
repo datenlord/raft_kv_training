@@ -29,7 +29,7 @@ message HardState {
 // `ConfState` contains the current membership information of the raft group
 message ConfState {
     // all node id
-    repeated uint64 nodes = 1;
+    repeated uint64 peers = 1;
 }
 
 // Message definition 
@@ -115,11 +115,11 @@ message MsgAppend {
     // current term
     uint64 term = 3;
     // commit index
-    uint64 commit = 4;
-    // last log term
-    uint64 log_term = 5;
-    // log index
-    uint64 index = 6;
+    uint64 leader_commit = 4;
+    // the prev log index of the leader, for consistency check
+    uint64 prev_log_index = 5;
+    // the prev log term of the leader, for consistency check
+    uint64 prev_log_term = 6;
     // log entries
     repeated Entry entries = 7;
 }
@@ -137,10 +137,11 @@ message MsgAppendResponse {
     uint64 term = 3;
     // reject AppendReuqeust or not
     bool reject = 4; 
-    // log term
-    uint64 log_term = 5;
-    // log index
-    uint64 index = 6;
+    // the last log index of the follower
+    uint64 last_log_index = 5;
+    // last log term of the follower
+    uint64 last_log_term = 6;
+    
 }
 
 // `MsgRequestVote` requests votes for election. When a node is a follower or
@@ -156,10 +157,11 @@ message MsgRequestVote {
     uint64 to = 2;
     // current term
     uint64 term = 3;
-    // log term
-    uint64 log_term = 4;
-    // log index
-    uint64 index = 5;
+    // the last log index of the candidate
+    uint64 last_log_index = 4;
+    // the last log term of the candidate
+    uint64 last_log_term = 5;
+    
 }
 
 // `MsgRequestVoteResponse` contains responses from voting request. When `MsgRequestVoteResponse` is
