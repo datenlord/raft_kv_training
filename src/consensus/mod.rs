@@ -19,3 +19,6 @@ pub const INVALID_ID: u64 = 0;
 
 /// A constant represents invalid index of raft log.
 pub const INVALID_INDEX: u64 = 0;
+
+/// A constant represents invalid term of raft log.
+pub const INVALID_TERM: u64 = 0;

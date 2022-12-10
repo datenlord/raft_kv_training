@@ -1,4 +1,4 @@
-use crate::{Entry, LogError, RaftError, Storage};
+use crate::{Entry, LogError, RaftError, Storage, StorageError, INVALID_TERM};
 use getset::{Getters, MutGetters};
 use std::fmt::Display;
 
@@ -7,7 +7,7 @@ use std::fmt::Display;
 #[derive(Debug, Getters, MutGetters)]
 #[non_exhaustive]
 pub struct RaftLog<T: Storage> {
-    /// Contains all stable entries since the last snapshot.
+    /// Contains all persisted entries
     #[getset(get, get_mut)]
     pub store: T,
 
@@ -25,13 +25,13 @@ pub struct RaftLog<T: Storage> {
     /// storage. It's used for limiting the upper bound of committed and
     /// persisted entries.
     ///
-    /// Invariant: persisted < unstable.offset && applied <= persisted
+    /// Invariant: committed <= persisted
     pub persisted: u64,
 
     /// The highest log position that the application has been instructed
     /// to apply to its state machine.
     ///
-    /// Invariant: applied <= min(committed, persisted)
+    /// Invariant: applied <= committed <= persisted
     #[getset(get)]
     pub applied: u64,
 }
@@ -60,26 +60,31 @@ impl<T: Storage> RaftLog<T> {
     #[allow(clippy::integer_arithmetic)]
     #[inline]
     pub fn new(store: T) -> Self {
-        let first_index = store.first_index();
         let last_index = store.last_index();
+        let raft_state = store.initial_state();
         Self {
             store,
-            committed: first_index - 1,
+            committed: raft_state.hard_state().committed,
             persisted: last_index,
-            applied: first_index - 1,
+            applied: raft_state.hard_state().applied,
             unstable_logs: Vec::new(),
         }
     }
 
     /// Grap the term from the last entry
-    ///
-    /// # Errors
-    ///
-    /// if `self.unstable_logs` is empty then return `EmptyUnstableLog`
     #[inline]
-    pub fn last_term(&self) -> Result<u64, RaftError> {
-        self.term(self.unstable_last_index())
-            .map_err(|_e| RaftError::Log(LogError::EmptyUnstableLog()))
+    pub fn last_term(&self) -> u64 {
+        match self.unstable_logs.last() {
+            Some(ent) => ent.term,
+            None => {
+                let last_index = self.store.last_index();
+                match self.store.term(last_index) {
+                    Ok(v) => v,
+                    Err(RaftError::Store(StorageError::InvalidIndex(_e))) => INVALID_TERM,
+                    Err(_e) => unreachable!(),
+                }
+            }
+        }
     }
 
     /// Find the term associated with the given index
@@ -140,6 +145,7 @@ impl<T: Storage> RaftLog<T> {
     #[inline]
     pub fn append(&mut self, ents: &[Entry]) -> Result<u64, RaftError> {
         let unstable_last_index = self.unstable_last_index();
+        let unstable_first_index = self.unstable_first_index();
         if let Some(ent) = ents.first() {
             let after = ent.index;
             if after <= self.committed {
@@ -154,7 +160,7 @@ impl<T: Storage> RaftLog<T> {
                     unstable_last_index,
                 )));
             }
-            let len: usize = (after - self.unstable_first_index() + 1)
+            let len: usize = (after - unstable_first_index + 1)
                 .try_into()
                 .map_err(|e| RaftError::Others(Box::new(e)))?;
             self.unstable_logs.truncate(len);
@@ -263,7 +269,7 @@ impl<T: Storage> RaftLog<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{result_eq, storage::MemStorage, Entry};
+    use crate::{result_eq, storage::MemStorage, Entry, INVALID_TERM};
     fn new_entry(index: u64, term: u64) -> Entry {
         Entry {
             term,
@@ -332,7 +338,7 @@ mod tests {
         let store = MemStorage::new();
         let mut raft_log = RaftLog::new(store);
         let res = raft_log.last_term();
-        result_eq!(res, Err(RaftError::Log(LogError::EmptyUnstableLog())));
+        assert_eq!(res, INVALID_TERM);
         raft_log.unstable_logs = vec![new_entry(1, 2), new_entry(2, 3), new_entry(3, 4)];
         result_eq!(raft_log.term(2), Ok(3));
         result_eq!(

@@ -20,7 +20,7 @@ pub enum RaftError {
 
 /// An error with the storage
 #[non_exhaustive]
-#[derive(Debug, Error, Clone, Copy)]
+#[derive(Debug, Error)]
 pub enum StorageError {
     /// Log Unavailable
     #[error("logs from {0} to {1} are unavailable")]
@@ -31,6 +31,9 @@ pub enum StorageError {
     /// Empty Entries
     #[error("empty entries")]
     EmptyEntries(),
+    /// Other errors, including IO Error or some other expected errors
+    #[error("storage unknown error: {0}")]
+    Others(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// An error with the `RaftLog`

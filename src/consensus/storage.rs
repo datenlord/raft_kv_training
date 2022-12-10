@@ -3,14 +3,15 @@ use getset::{Getters, MutGetters, Setters};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// Holds both the hard state {term, commit index, vote leader} and the configuration state
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, Getters, Setters, MutGetters)]
 pub struct RaftState {
     /// Contains the last meta information including commit index, the vote leader, and the vote term.
-    #[getset(get, set, get_mut)]
-    hard_state: HardState,
+    #[getset(get = "pub", set, get_mut)]
+    pub hard_state: HardState,
     /// Records the current node IDs like `[1, 2, 3]` in the cluster.
     #[getset(set)]
-    conf_state: ConfState,
+    pub conf_state: ConfState,
 }
 
 impl RaftState {
@@ -101,6 +102,10 @@ impl MemStorageCore {
         if index == INVALID_INDEX {
             return Err(RaftError::Store(StorageError::InvalidIndex(index)));
         }
+        // TODO: What if idx is less than first_index? Because the log compaction has yet to
+        // implement, the first_index must start at one. Once when we implement log compaction,
+        // we should return RaftError::Log(LogError::Compacted) to the caller if idx is less than
+        // the first_index of the log.
         let last_idx = self.last_index();
         if index > last_idx {
             return Err(RaftError::Store(StorageError::Unavailable(last_idx, index)));
@@ -178,7 +183,7 @@ impl MemStorageCore {
 
         let term = self.entries[offset].term;
         let hard_state = self.raft_state_mut().hard_state_mut();
-        hard_state.commit = index;
+        hard_state.committed = index;
         hard_state.term = term;
         Ok(())
     }
@@ -224,7 +229,7 @@ impl MemStorage {
     ///
     /// You should use the same input to initialize all nodes.
     #[inline]
-    fn initialize_with_conf_state<T>(&self, conf_state: T)
+    pub fn initialize_with_conf_state<T>(&self, conf_state: T)
     where
         ConfState: From<T>,
     {
@@ -372,7 +377,6 @@ mod test {
         let storage = MemStorage::new();
         storage.wl().entries = ents;
         assert_eq!(storage.first_index(), 1);
-
         // TODO: considering the compact case
     }
 
@@ -461,8 +465,9 @@ mod test {
                 2,
                 Some(HardState {
                     term: 2,
-                    commit: 2,
-                    vote: 0,
+                    committed: 2,
+                    voted_for: 0,
+                    applied: 0,
                 }),
                 Ok(()),
             ),
