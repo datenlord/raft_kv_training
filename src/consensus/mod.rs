@@ -4,6 +4,8 @@ pub mod config;
 pub mod errors;
 /// log module
 pub mod log;
+/// Progress module
+pub mod progress;
 /// raft module
 pub mod raft;
 /// storage module
@@ -11,6 +13,7 @@ pub mod storage;
 
 pub use config::*;
 pub use errors::*;
+pub use progress::*;
 pub use raft::*;
 pub use storage::*;
 
