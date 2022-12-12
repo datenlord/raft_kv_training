@@ -23,6 +23,9 @@ pub enum RaftError {
 #[derive(Debug, Error)]
 pub enum StorageError {
     /// Log Unavailable
+    #[error("log[{0}] is unavailable")]
+    LogEntryUnavailable(u64),
+    /// Log Unavailable
     #[error("logs from {0} to {1} are unavailable")]
     Unavailable(u64, u64),
     /// Invalid stable log index
@@ -75,6 +78,10 @@ macro_rules! result_match {
                         (
                             $crate::errors::StorageError::InvalidIndex(l),
                             $crate::errors::StorageError::InvalidIndex(r),
+                        )
+                        | (
+                            $crate::errors::StorageError::LogEntryUnavailable(l),
+                            $crate::errors::StorageError::LogEntryUnavailable(r),
                         ) => l == r,
                         (
                             $crate::errors::StorageError::EmptyEntries(),

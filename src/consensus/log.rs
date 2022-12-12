@@ -78,6 +78,7 @@ impl<T: Storage> RaftLog<T> {
             Some(ent) => ent.term,
             None => {
                 let last_index = self.store.last_index();
+
                 match self.store.term(last_index) {
                     Ok(v) => v,
                     Err(RaftError::Store(StorageError::InvalidIndex(_e))) => INVALID_TERM,
@@ -98,7 +99,9 @@ impl<T: Storage> RaftLog<T> {
     pub fn term(&self, idx: u64) -> Result<u64, RaftError> {
         let unstable_first_index = self.unstable_first_index();
         let unstable_last_index = self.unstable_last_index();
-        if idx >= self.store.first_index() && idx <= self.store.last_index() {
+        let storage_first_idx = self.store.first_index();
+        let storage_last_idx = self.store.last_index();
+        if idx >= storage_first_idx && idx <= storage_last_idx {
             self.store.term(idx)
         } else if idx >= unstable_first_index && idx <= unstable_last_index {
             // there is no need to worry about overflow in that offset is belong to [0, self.unstable_logs.len)
