@@ -1,4 +1,6 @@
-use crate::{ConfState, Entry, HardState, RaftError, StorageError, INVALID_INDEX, INVALID_TERM};
+use crate::{
+    down_cast, ConfState, Entry, HardState, RaftError, StorageError, INVALID_INDEX, INVALID_TERM,
+};
 use getset::{Getters, MutGetters, Setters};
 use std::cmp::{max, min};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -110,9 +112,7 @@ impl MemStorageCore {
         match (first_idx, last_idx) {
             (Some(first), Some(last)) => {
                 if idx <= last {
-                    let offset: usize = (idx - first)
-                        .try_into()
-                        .map_err(|e| RaftError::Store(StorageError::Others(Box::new(e))))?;
+                    let offset: usize = down_cast(idx - first)?;
                     Ok(&self.entries[offset])
                 } else {
                     Err(RaftError::Store(StorageError::LogEntryUnavailable(idx)))
@@ -158,9 +158,7 @@ impl MemStorageCore {
                 ents_first_idx,
             )))
         } else {
-            let offset: usize = (ents_first_idx - first_idx)
-                .try_into()
-                .map_err(|e| RaftError::Others(Box::new(e)))?;
+            let offset: usize = down_cast(ents_first_idx - first_idx)?;
             drop(self.entries.drain(offset..));
             self.entries.extend_from_slice(ents);
             Ok(())
@@ -287,12 +285,8 @@ impl Storage for MemStorage {
                 )));
             }
 
-            let lo = (low - first_idx)
-                .try_into()
-                .map_err(|e| RaftError::Others(Box::new(e)))?;
-            let hi = (high - first_idx)
-                .try_into()
-                .map_err(|e| RaftError::Others(Box::new(e)))?;
+            let lo: usize = down_cast(low - first_idx)?;
+            let hi: usize = down_cast(high - first_idx)?;
             Ok(core.entries[lo..=hi].to_vec())
         }
     }

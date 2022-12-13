@@ -1,4 +1,4 @@
-use crate::{Entry, LogError, RaftError, Storage, StorageError, INVALID_TERM};
+use crate::{down_cast, Entry, LogError, RaftError, Storage, INVALID_INDEX, INVALID_TERM};
 use getset::{Getters, MutGetters};
 use std::fmt::Display;
 
@@ -13,7 +13,7 @@ pub struct RaftLog<T: Storage> {
 
     /// Contains all unstable entries that will be stored into storage
     #[getset(get)]
-    pub unstable_logs: Vec<Entry>,
+    pub log_buffer: Vec<Entry>,
 
     /// The highest log position that is known to be in stable storage
     /// on a quorum of nodes.
@@ -44,11 +44,11 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "committed = {}, persisted = {}, applied = {}, unstable_logs.len={}",
+            "committed = {}, persisted = {}, applied = {}, log_buffer.len={}",
             self.committed,
             self.persisted,
             self.applied,
-            self.unstable_logs.len()
+            self.log_buffer.len()
         )
     }
 }
@@ -67,21 +67,20 @@ impl<T: Storage> RaftLog<T> {
             committed: raft_state.hard_state().committed,
             persisted: last_index,
             applied: raft_state.hard_state().applied,
-            unstable_logs: Vec::new(),
+            log_buffer: Vec::new(),
         }
     }
 
     /// Grap the term from the last entry
     #[inline]
     pub fn last_term(&self) -> u64 {
-        match self.unstable_logs.last() {
+        match self.log_buffer.last() {
             Some(ent) => ent.term,
             None => {
                 let last_index = self.store.last_index();
 
                 match self.store.term(last_index) {
                     Ok(v) => v,
-                    Err(RaftError::Store(StorageError::InvalidIndex(_e))) => INVALID_TERM,
                     Err(_e) => unreachable!(),
                 }
             }
@@ -93,36 +92,34 @@ impl<T: Storage> RaftLog<T> {
     /// # Errors
     ///
     /// return `IndexOutOfBounds` if the idx is out of the range
-    /// [`unstable_first_index`, `unstable_last_index`] or [`stable_first_index`, `stable_last_index`]
+    /// [`buffer_first_index`, `buffer_last_index`] or [`stable_first_index`, `stable_last_index`]
     #[allow(clippy::indexing_slicing, clippy::integer_arithmetic)]
     #[inline]
     pub fn term(&self, idx: u64) -> Result<u64, RaftError> {
-        let unstable_first_index = self.unstable_first_index();
-        let unstable_last_index = self.unstable_last_index();
+        if idx == INVALID_INDEX {
+            return Ok(INVALID_TERM);
+        }
+        let buffer_first_index = self.buffer_first_index();
+        let buffer_last_index = self.buffer_last_index();
         let storage_first_idx = self.store.first_index();
         let storage_last_idx = self.store.last_index();
         if idx >= storage_first_idx && idx <= storage_last_idx {
             self.store.term(idx)
-        } else if idx >= unstable_first_index && idx <= unstable_last_index {
-            // there is no need to worry about overflow in that offset is belong to [0, self.unstable_logs.len)
-            // and it's OK to use offset to index the self.unstable_logs
-            let offset: usize = (idx - unstable_first_index)
-                .try_into()
-                .map_err(|e| RaftError::Others(Box::new(e)))?;
-            Ok(self.unstable_logs[offset].term)
+        } else if idx >= buffer_first_index && idx <= buffer_last_index {
+            // there is no need to worry about overflow in that offset is belong to [0, self.log_buffer.len)
+            // and it's OK to use offset to index the self.log_buffer
+            let offset: usize = down_cast(idx - buffer_first_index)?;
+            Ok(self.log_buffer[offset].term)
         } else {
-            Err(RaftError::Log(LogError::IndexOutOfBounds(
-                idx,
-                unstable_last_index,
-            )))
+            Err(RaftError::Log(LogError::LogEntryUnavailable(idx)))
         }
     }
 
     /// Returns the first index in the unstable log
     #[inline]
     #[allow(clippy::integer_arithmetic)]
-    pub fn unstable_first_index(&self) -> u64 {
-        match self.unstable_logs.first() {
+    pub fn buffer_first_index(&self) -> u64 {
+        match self.log_buffer.first() {
             Some(e) => e.index,
             // index is a 64-bit unsigned integer number, so the probability of index+1 overflow is very low.
             None => self.store.last_index() + 1,
@@ -131,8 +128,8 @@ impl<T: Storage> RaftLog<T> {
 
     /// Returns the last index in the unstable log.
     #[inline]
-    pub fn unstable_last_index(&self) -> u64 {
-        match self.unstable_logs.last() {
+    pub fn buffer_last_index(&self) -> u64 {
+        match self.log_buffer.last() {
             Some(e) => e.index,
             None => self.store.last_index(),
         }
@@ -140,38 +137,68 @@ impl<T: Storage> RaftLog<T> {
 
     /// Appends a set of entries to the unstable list
     ///
+    /// Note: `buffer_first` = persisted + 1
+    ///   first     committed   persisted `buffer_first`    `buffer_last`
+    ///    |____________|____________|________|__________________|
+    ///    |<---------storage------->|        |<--`log_buffer`-->|
+    /// 1      |_ents_|
+    /// 2          |_ents_|
+    /// 3                  |_ents_|   
+    /// 4                         |_____ents_____|   
+    /// 5                                          |_ents_|     
+    /// 6                                               |____ents_____|    
+    /// 7                                                              |__ents__|
+    ///
     /// # Errors
     ///
     /// if the first index of `ents` is less than `self.committed` then return `TruncatedStableLog`
-    /// if the first index of `ents` is greater than `self.unstable_last_index`() + 1 then return `IndexOutOfBounds`
-    #[allow(clippy::integer_arithmetic)]
+    /// if the first index of `ents` is greater than `self.buffer_last_index`() + 1 then return `Unavailable`
+    #[allow(clippy::integer_arithmetic, clippy::indexing_slicing)]
     #[inline]
-    pub fn append(&mut self, ents: &[Entry]) -> Result<u64, RaftError> {
-        let unstable_last_index = self.unstable_last_index();
-        let unstable_first_index = self.unstable_first_index();
-        if let Some(ent) = ents.first() {
-            let after = ent.index;
-            if after <= self.committed {
-                return Err(RaftError::Log(LogError::TruncatedStableLog(
-                    after,
-                    self.committed,
-                )));
-            }
-            if after > unstable_last_index + 1 {
-                return Err(RaftError::Log(LogError::IndexOutOfBounds(
-                    after,
-                    unstable_last_index,
-                )));
-            }
-            let len: usize = (after - unstable_first_index + 1)
-                .try_into()
-                .map_err(|e| RaftError::Others(Box::new(e)))?;
-            self.unstable_logs.truncate(len);
-            self.unstable_logs.extend_from_slice(ents);
-            Ok(self.unstable_last_index())
-        } else {
-            Ok(unstable_last_index)
+    pub fn append(&mut self, ents: &[Entry]) -> Result<(), RaftError> {
+        if ents.is_empty() {
+            return Ok(());
         }
+
+        let buffer_last_idx = self.buffer_last_index();
+        let ents_first_idx = ents[0].index;
+        let ents_last_idx = ents[ents.len() - 1].index;
+
+        if ents_first_idx <= self.committed {
+            // case 1 and case 2
+            return Err(RaftError::Log(LogError::TruncatedStableLog(
+                ents_first_idx,
+                self.committed,
+            )));
+        }
+
+        if ents_first_idx > buffer_last_idx + 1 {
+            // case 7
+            return Err(RaftError::Log(LogError::Unavailable(
+                buffer_last_idx + 1,
+                ents_first_idx,
+            )));
+        }
+
+        if ents_first_idx <= self.persisted {
+            if ents_last_idx <= self.persisted {
+                // case 3
+                self.store.append(ents)?;
+            } else {
+                // case 4, we need to split ents into two tow parts.
+                let offset: usize = down_cast(self.persisted - ents_first_idx)?;
+                self.store.append(&ents[0..=offset])?;
+                self.log_buffer.clear();
+                self.log_buffer.extend_from_slice(&ents[offset + 1..]);
+            }
+        } else {
+            // case 5 and case 6
+            let length: usize = down_cast(ents_first_idx - self.persisted)?;
+            self.log_buffer.truncate(length);
+            self.log_buffer.extend_from_slice(ents);
+        }
+
+        Ok(())
     }
 
     /// Sets the last committed value to the passed in value.
@@ -179,12 +206,14 @@ impl<T: Storage> RaftLog<T> {
     /// # Errors
     ///
     /// return `IndexOutOfBounds` if `to_commit` is larger than the last index of the unstable log
+    #[allow(clippy::integer_arithmetic)]
     #[inline]
     pub fn commit_to(&mut self, to_commit: u64) -> Result<(), RaftError> {
-        let last_index = self.unstable_last_index();
+        let last_index = self.buffer_last_index();
         if to_commit > last_index {
-            return Err(RaftError::Log(LogError::IndexOutOfBounds(
-                to_commit, last_index,
+            return Err(RaftError::Log(LogError::Unavailable(
+                last_index + 1,
+                to_commit,
             )));
         }
         if to_commit > self.committed {
@@ -195,10 +224,13 @@ impl<T: Storage> RaftLog<T> {
 
     /// Returns the committed index and its term.
     #[inline]
-    pub fn commit_info(&self) -> (u64, Option<u64>) {
+    pub fn commit_info(&self) -> (u64, u64) {
         match self.term(self.committed) {
-            Ok(t) => (self.committed, Some(t)),
-            Err(_e) => (self.committed, None),
+            Ok(t) => (self.committed, t),
+            Err(_e) => {
+                println!("{}", self.committed);
+                unreachable!()
+            }
         }
     }
 
@@ -234,38 +266,15 @@ impl<T: Storage> RaftLog<T> {
         None
     }
 
-    /// Store the unstable entries to the given index, if there is any
-    ///
-    /// # Errors
-    ///
-    /// return `IndexOutOfBounds` if idx is out of `unstable_logs`'s range.
-    /// return `Unconsistent` if idx and term are not matched.
+    /// Store the log buffer to the storage backend, if there is any
     #[allow(clippy::integer_arithmetic)]
     #[inline]
-    pub fn persist_log_entries(&mut self, idx: u64) -> Result<(), RaftError> {
-        let unstable_first_index = self.unstable_first_index();
-        let unstable_last_index = self.unstable_last_index();
-        if idx < unstable_first_index {
-            return Err(RaftError::Log(LogError::IndexOutOfBounds(
-                idx,
-                unstable_first_index,
-            )));
+    pub fn persist_log_buffer(&mut self) {
+        let log_buffer_temp = self.log_buffer.drain(..);
+        match self.store.append(log_buffer_temp.as_slice()) {
+            Ok(()) => self.persisted = self.store.last_index(),
+            Err(_) => unreachable!(),
         }
-        if idx > unstable_last_index {
-            return Err(RaftError::Log(LogError::IndexOutOfBounds(
-                unstable_last_index,
-                idx,
-            )));
-        }
-
-        // unstable_first_index <= idx <= unstable_last_index, so there's no need to worry about overflow
-        let offset: usize = (idx - unstable_first_index)
-            .try_into()
-            .map_err(|e| RaftError::Others(Box::new(e)))?;
-
-        let drain_res = self.unstable_logs.drain(..=offset);
-        self.store.append(drain_res.as_slice())?;
-        Ok(())
     }
 }
 
@@ -308,7 +317,7 @@ mod tests {
                 vec![new_entry(2, 3), new_entry(3, 4)],
                 Err(RaftError::Log(LogError::TruncatedStableLog(2, 2))),
             ),
-            (vec![new_entry(3, 4)], Ok(3)),
+            (vec![new_entry(3, 4)], Ok(())),
             (
                 vec![
                     new_entry(5, 5),
@@ -317,18 +326,18 @@ mod tests {
                     new_entry(8, 8),
                     new_entry(9, 9),
                 ],
-                Ok(9),
+                Ok(()),
             ),
             (
                 vec![new_entry(7, 7), new_entry(8, 8), new_entry(9, 9)],
-                Err(RaftError::Log(LogError::IndexOutOfBounds(7, 4))),
+                Err(RaftError::Log(LogError::Unavailable(5, 7))),
             ),
         ];
 
         for (entries, wres) in tests {
             let store = MemStorage::new();
             let mut raft_log = RaftLog::new(store);
-            raft_log.unstable_logs = ents.clone();
+            raft_log.log_buffer = ents.clone();
             raft_log.commit_to(2).unwrap();
 
             let res = raft_log.append(&entries);
@@ -342,11 +351,11 @@ mod tests {
         let mut raft_log = RaftLog::new(store);
         let res = raft_log.last_term();
         assert_eq!(res, INVALID_TERM);
-        raft_log.unstable_logs = vec![new_entry(1, 2), new_entry(2, 3), new_entry(3, 4)];
+        raft_log.log_buffer = vec![new_entry(1, 2), new_entry(2, 3), new_entry(3, 4)];
         result_eq!(raft_log.term(2), Ok(3));
         result_eq!(
             raft_log.term(100),
-            Err(RaftError::Log(LogError::IndexOutOfBounds(100, 3)))
+            Err(RaftError::Log(LogError::LogEntryUnavailable(100)))
         )
     }
 
@@ -354,7 +363,7 @@ mod tests {
     fn test_log_match() {
         let storage = MemStorage::new();
         let mut raft_log = RaftLog::new(storage);
-        raft_log.unstable_logs = vec![new_entry(1, 2), new_entry(2, 3), new_entry(3, 4)];
+        raft_log.log_buffer = vec![new_entry(1, 2), new_entry(2, 3), new_entry(3, 4)];
         assert!(raft_log.match_term(1, 2));
         assert!(!raft_log.match_term(2, 2));
         assert!(!raft_log.match_term(21, 21));
@@ -391,7 +400,8 @@ mod tests {
     fn test_commit_to() {
         let storage = MemStorage::new();
         let mut raft_log = RaftLog::new(storage);
-        assert_eq!((0, None), raft_log.commit_info());
+        println!("123");
+        assert_eq!((0, 0), raft_log.commit_info());
         let _res = raft_log.append(&[
             new_entry(1, 1),
             new_entry(2, 2),
@@ -400,7 +410,7 @@ mod tests {
         ]);
         raft_log.commit_to(2).unwrap();
         let (idx, term) = raft_log.commit_info();
-        assert_eq!((idx, term), (2, Some(2)));
+        assert_eq!((idx, term), (2, 2));
     }
 
     #[test]
@@ -408,33 +418,22 @@ mod tests {
         let tests = vec![
             (
                 vec![new_entry(1, 1), new_entry(2, 2)],
-                1,
-                Ok(()),
-                vec![new_entry(2, 2)],
+                vec![new_entry(3, 3), new_entry(4, 4)],
+                4,
             ),
-            (vec![new_entry(1, 1), new_entry(2, 2)], 2, Ok(()), vec![]),
-            (
-                vec![],
-                1,
-                Err(RaftError::Log(LogError::IndexOutOfBounds(0, 1))),
-                vec![],
-            ),
-            (
-                vec![new_entry(1, 1), new_entry(2, 2)],
-                1,
-                Ok(()),
-                vec![new_entry(2, 2)],
-            ),
+            (vec![], vec![new_entry(1, 1), new_entry(2, 2)], 2),
+            (vec![new_entry(1, 1), new_entry(2, 2)], vec![], 2),
+            (vec![], vec![], 0),
         ];
 
-        for (ents, idx, wres, unstable_logs) in tests {
+        for (stables, log_buffer, persisted) in tests {
             let storage = MemStorage::new();
+            storage.wl().append(&stables[..]).unwrap();
             let mut raft_log = RaftLog::new(storage);
-            let _res = raft_log.append(&ents).unwrap();
-            assert_eq!(raft_log.unstable_logs, ents);
-            let res = raft_log.persist_log_entries(idx);
-            result_eq!(res, wres);
-            assert_eq!(raft_log.unstable_logs, unstable_logs);
+            raft_log.append(&log_buffer).unwrap();
+            raft_log.persist_log_buffer();
+            assert!(raft_log.log_buffer.is_empty());
+            assert_eq!(raft_log.persisted, persisted);
         }
     }
 }

@@ -46,9 +46,9 @@ pub enum LogError {
     /// Invalid unstable log Index
     #[error("unstable log index is invalid: {0}")]
     InvalidIndex(u64),
-    /// Log index is out of range
-    #[error("index must be less than the last log index: index = {0}, last_index = {1}")]
-    IndexOutOfBounds(u64, u64),
+    /// Log Unavailable
+    #[error("logs from {0} to {1} are unavailable")]
+    Unavailable(u64, u64),
     /// Empty unstable log
     #[error("Unstable log entries are empty")]
     EmptyUnstableLog(),
@@ -60,6 +60,9 @@ pub enum LogError {
         "The last entry of unstable_logs has different index {0} and term {1}, expect {2} {3} "
     )]
     Unconsistent(u64, u64, u64, u64),
+    /// Log Unavailable
+    #[error("log[{0}] is unavailable")]
+    LogEntryUnavailable(u64),
 }
 
 /// A macro
@@ -103,10 +106,14 @@ macro_rules! result_match {
                         (
                             $crate::errors::LogError::InvalidIndex(l),
                             $crate::errors::LogError::InvalidIndex(r),
+                        )
+                        | (
+                            $crate::errors::LogError::LogEntryUnavailable(l),
+                            $crate::errors::LogError::LogEntryUnavailable(r),
                         ) => l == r,
                         (
-                            $crate::errors::LogError::IndexOutOfBounds(l1, l2),
-                            $crate::errors::LogError::IndexOutOfBounds(r1, r2),
+                            $crate::errors::LogError::Unavailable(l1, l2),
+                            $crate::errors::LogError::Unavailable(r1, r2),
                         ) => l1 == r1 && l2 == r2,
                         (
                             $crate::errors::LogError::Unconsistent(l1, l2, l3, l4),
@@ -210,13 +217,13 @@ mod tests {
         );
 
         result_eq!(
-            error_generator(Some(RaftError::Log(LogError::IndexOutOfBounds(21, 42)))),
-            error_generator(Some(RaftError::Log(LogError::IndexOutOfBounds(21, 42))))
+            error_generator(Some(RaftError::Log(LogError::Unavailable(21, 42)))),
+            error_generator(Some(RaftError::Log(LogError::Unavailable(21, 42))))
         );
 
         result_ne!(
-            error_generator(Some(RaftError::Log(LogError::IndexOutOfBounds(21, 42)))),
-            error_generator(Some(RaftError::Log(LogError::IndexOutOfBounds(11, 21))))
+            error_generator(Some(RaftError::Log(LogError::Unavailable(21, 42)))),
+            error_generator(Some(RaftError::Log(LogError::Unavailable(11, 21))))
         );
 
         result_eq!(

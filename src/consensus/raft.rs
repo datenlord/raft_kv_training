@@ -169,7 +169,7 @@ impl<T: Storage> Raft<T> {
         self.reset(term);
         self.leader_id = self.id;
         self.role = State::Leader;
-        let last_index = self.raft_log.unstable_last_index();
+        let last_index = self.raft_log.buffer_last_index();
         for (&id, peer) in &mut self.progresses {
             if id == self.id {
                 peer.matched = last_index + 1;
@@ -194,7 +194,7 @@ impl<T: Storage> Raft<T> {
         self.random_election_timeout =
             rand::thread_rng().gen_range(self.election_timeout..2 * self.election_timeout);
         self.votes.clear();
-        let last_index = self.raft_log.unstable_last_index();
+        let last_index = self.raft_log.buffer_last_index();
         let committed = self.raft_log.committed;
         let persisted = self.raft_log.persisted;
         let self_id = self.id;
@@ -259,7 +259,7 @@ impl<T: Storage> Raft<T> {
     pub fn campaign(&mut self) {
         self.become_candidate();
         let last_log_term = self.raft_log.last_term();
-        let last_log_index = self.raft_log.unstable_last_index();
+        let last_log_index = self.raft_log.buffer_last_index();
         let term = self.term;
         let self_id = self.id;
 
