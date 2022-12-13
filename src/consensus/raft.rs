@@ -233,6 +233,12 @@ impl<T: Storage> Raft<T> {
         true
     }
 
+    /// Read messages out of the raft
+    #[inline]
+    pub fn read_messages(&mut self) -> Vec<Message> {
+        self.msgs.drain(..).collect()
+    }
+
     /// Steps the raft along via a message. This should be called everytime your raft receives a
     /// message from a peer.
     #[inline]

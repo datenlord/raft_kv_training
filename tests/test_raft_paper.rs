@@ -1,6 +1,7 @@
 use raft_kv::consensus::raft::*;
 use raft_kv::Message;
 use raft_kv::{Config, MemStorage, Raft, RaftError, Storage};
+use std::collections::HashMap;
 use std::fmt::Debug;
 
 pub fn error_handle<T, E>(res: Result<T, E>) -> T
@@ -88,4 +89,44 @@ fn test_nonleader_start_election(role: State) {
 
     let expect_msgs = vec![new_message_ext(1, 2), new_message_ext(1, 3)];
     assert_eq!(msgs, expect_msgs);
+}
+
+#[test]
+fn test_follower_election_timeout_randomized() {
+    test_non_leader_election_timeout_randomized(State::Follower);
+}
+
+#[test]
+fn test_candidate_election_timeout_randomized() {
+    test_non_leader_election_timeout_randomized(State::Candidate);
+}
+
+// test_non_leader_election_timeout_randomized tests that election timeout for
+// follower or candidate is randomized.
+// Reference: section 5.2
+fn test_non_leader_election_timeout_randomized(state: State) {
+    let et = 10;
+    let store = MemStorage::new();
+    let mut r = new_test_raft(1, vec![1, 2, 3], et, 1, store).unwrap();
+    let mut timeouts = HashMap::new();
+    for _ in 0..1000 * et {
+        let term = r.term;
+        match state {
+            State::Follower => r.become_follower(term + 1, 2),
+            State::Candidate => r.become_candidate(),
+            _ => panic!("only non leader state is accepted!"),
+        }
+
+        let mut time = 0;
+        while r.read_messages().is_empty() {
+            r.tick();
+            time += 1;
+        }
+        timeouts.insert(time, true);
+    }
+
+    assert!(timeouts.len() <= et && timeouts.len() >= et - 1);
+    for d in et + 1..2 * et {
+        assert!(timeouts[&d]);
+    }
 }
