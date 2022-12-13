@@ -151,7 +151,7 @@ impl<T: Storage> RaftLog<T> {
     ///
     /// # Errors
     ///
-    /// if the first index of `ents` is less than `self.committed` then return `TruncatedStableLog`
+    /// if the first index of `ents` is less than `self.committed` then return `TruncateCommittedLog`
     /// if the first index of `ents` is greater than `self.buffer_last_index`() + 1 then return `Unavailable`
     #[allow(clippy::integer_arithmetic, clippy::indexing_slicing)]
     #[inline]
@@ -166,7 +166,7 @@ impl<T: Storage> RaftLog<T> {
 
         if ents_first_idx <= self.committed {
             // case 1 and case 2
-            return Err(RaftError::Log(LogError::TruncatedStableLog(
+            return Err(RaftError::Log(LogError::TruncateCommittedLog(
                 ents_first_idx,
                 self.committed,
             )));
@@ -315,7 +315,7 @@ mod tests {
         let tests = vec![
             (
                 vec![new_entry(2, 3), new_entry(3, 4)],
-                Err(RaftError::Log(LogError::TruncatedStableLog(2, 2))),
+                Err(RaftError::Log(LogError::TruncateCommittedLog(2, 2))),
             ),
             (vec![new_entry(3, 4)], Ok(())),
             (

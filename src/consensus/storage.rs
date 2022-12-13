@@ -1,5 +1,5 @@
 use crate::{
-    down_cast, ConfState, Entry, HardState, RaftError, StorageError, INVALID_INDEX, INVALID_TERM,
+    down_cast, ConfState, Entry, HardState, LogError, RaftError, INVALID_INDEX, INVALID_TERM,
 };
 use getset::{Getters, MutGetters, Setters};
 use std::cmp::{max, min};
@@ -115,11 +115,11 @@ impl MemStorageCore {
                     let offset: usize = down_cast(idx - first)?;
                     Ok(&self.entries[offset])
                 } else {
-                    Err(RaftError::Store(StorageError::LogEntryUnavailable(idx)))
+                    Err(RaftError::Log(LogError::LogEntryUnavailable(idx)))
                 }
             }
             (None, Some(_) | None) | (Some(_), None) => {
-                Err(RaftError::Store(StorageError::LogEntryUnavailable(idx)))
+                Err(RaftError::Log(LogError::LogEntryUnavailable(idx)))
             }
         }
     }
@@ -153,7 +153,7 @@ impl MemStorageCore {
         let last_idx = self.last_index().map_or_else(|| INVALID_INDEX, |last| last);
 
         if last_idx + 1 < ents_first_idx {
-            Err(RaftError::Store(StorageError::Unavailable(
+            Err(RaftError::Log(LogError::Unavailable(
                 last_idx,
                 ents_first_idx,
             )))
@@ -174,7 +174,6 @@ impl MemStorageCore {
     #[allow(clippy::integer_arithmetic, clippy::indexing_slicing)]
     pub fn commit_to(&mut self, idx: u64) -> Result<(), RaftError> {
         if idx == INVALID_INDEX {
-            // return Err(RaftError::Store(StorageError::InvalidIndex(idx)));
             return Ok(());
         }
         let entry = self.get_entry(idx)?;
@@ -268,18 +267,18 @@ impl Storage for MemStorage {
         let first_idx = self.first_index();
         let last_idx = self.last_index();
         if first_idx == INVALID_INDEX + 1 || last_idx == INVALID_INDEX {
-            Err(RaftError::Store(StorageError::Unavailable(low, high)))
+            Err(RaftError::Log(LogError::Unavailable(low, high)))
         } else {
             let core = self.wl();
             if low < first_idx {
-                return Err(RaftError::Store(StorageError::Unavailable(
+                return Err(RaftError::Log(LogError::Unavailable(
                     low,
                     min(high, first_idx - 1),
                 )));
             }
 
             if high > last_idx {
-                return Err(RaftError::Store(StorageError::Unavailable(
+                return Err(RaftError::Log(LogError::Unavailable(
                     max(low, last_idx + 1),
                     high,
                 )));
@@ -327,7 +326,7 @@ impl Storage for MemStorage {
 mod test {
     use std::vec;
 
-    use crate::{result_eq, Entry, HardState, RaftError, StorageError};
+    use crate::{result_eq, Entry, HardState, LogError, RaftError};
 
     use super::{MemStorage, Storage};
 
@@ -346,10 +345,7 @@ mod test {
             (1, Ok(4)),
             (2, Ok(5)),
             (3, Ok(6)),
-            (
-                4,
-                Err(RaftError::Store(StorageError::LogEntryUnavailable(4))),
-            ),
+            (4, Err(RaftError::Log(LogError::LogEntryUnavailable(4)))),
         ];
 
         let storage = MemStorage::new();
@@ -366,9 +362,9 @@ mod test {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let tests_1 = vec![
             (2, 1, Ok(vec![])),
-            (1, 2, Err(RaftError::Store(StorageError::Unavailable(1, 2)))),
-            (2, 4, Err(RaftError::Store(StorageError::Unavailable(2, 2)))),
-            (2, 3, Err(RaftError::Store(StorageError::Unavailable(2, 2)))),
+            (1, 2, Err(RaftError::Log(LogError::Unavailable(1, 2)))),
+            (2, 4, Err(RaftError::Log(LogError::Unavailable(2, 2)))),
+            (2, 3, Err(RaftError::Log(LogError::Unavailable(2, 2)))),
             (4, 4, Ok(vec![new_entry(4, 4)])),
             (3, 4, Ok(vec![new_entry(3, 3), new_entry(4, 4)])),
             (
@@ -376,9 +372,9 @@ mod test {
                 5,
                 Ok(vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)]),
             ),
-            (4, 6, Err(RaftError::Store(StorageError::Unavailable(6, 6)))),
-            (6, 7, Err(RaftError::Store(StorageError::Unavailable(6, 7)))),
-            (1, 7, Err(RaftError::Store(StorageError::Unavailable(1, 2)))),
+            (4, 6, Err(RaftError::Log(LogError::Unavailable(6, 6)))),
+            (6, 7, Err(RaftError::Log(LogError::Unavailable(6, 7)))),
+            (1, 7, Err(RaftError::Log(LogError::Unavailable(1, 2)))),
         ];
         let storage = MemStorage::new();
         storage.wl().entries = ents;
@@ -388,13 +384,9 @@ mod test {
         }
 
         let tests_2 = vec![
-            (1, 2, Err(RaftError::Store(StorageError::Unavailable(1, 2)))),
-            (4, 5, Err(RaftError::Store(StorageError::Unavailable(4, 5)))),
-            (
-                1,
-                10,
-                Err(RaftError::Store(StorageError::Unavailable(1, 10))),
-            ),
+            (1, 2, Err(RaftError::Log(LogError::Unavailable(1, 2)))),
+            (4, 5, Err(RaftError::Log(LogError::Unavailable(4, 5)))),
+            (1, 10, Err(RaftError::Log(LogError::Unavailable(1, 10)))),
             (2, 1, Ok(vec![])),
         ];
         let storage = MemStorage::new();
@@ -463,7 +455,7 @@ mod test {
             // append entries whose index is greater than the last_index is not allowed
             (
                 vec![new_entry(7, 3), new_entry(8, 3), new_entry(9, 5)],
-                Err(RaftError::Store(crate::StorageError::Unavailable(3, 7))),
+                Err(RaftError::Log(LogError::Unavailable(3, 7))),
                 None,
             ),
             // truncate the existing entries and append
@@ -503,7 +495,7 @@ mod test {
             (
                 5,
                 None,
-                Err(RaftError::Store(StorageError::LogEntryUnavailable(5))),
+                Err(RaftError::Log(LogError::LogEntryUnavailable(5))),
             ),
         ];
 
