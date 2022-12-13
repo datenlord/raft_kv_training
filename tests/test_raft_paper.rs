@@ -1,6 +1,6 @@
 use raft_kv::consensus::raft::*;
 use raft_kv::Message;
-use raft_kv::{Config, MemStorage, Raft, RaftError, Storage};
+use raft_kv::{Config, MemStorage, Raft, RaftError, Storage, INVALID_ID};
 use std::collections::HashMap;
 use std::fmt::Debug;
 
@@ -129,4 +129,55 @@ fn test_non_leader_election_timeout_randomized(state: State) {
     for d in et + 1..2 * et {
         assert!(timeouts[&d]);
     }
+}
+
+#[test]
+fn test_follower_election_timeout_nonconflict() {
+    test_nonleaders_election_timeout_nonconfict(State::Follower);
+}
+
+#[test]
+fn test_candidates_election_timeout_nonconflict() {
+    test_nonleaders_election_timeout_nonconfict(State::Candidate);
+}
+
+// test_nonleaders_election_timeout_nonconfict tests that in most cases only a
+// single server(follower or candidate) will time out, which reduces the
+// likelihood of split vote in the new election.
+// Reference: section 5.2
+fn test_nonleaders_election_timeout_nonconfict(state: State) {
+    let et = 10;
+    let size = 5;
+    let mut rs = Vec::with_capacity(size);
+    let ids: Vec<u64> = (1..=size as u64).collect();
+    for id in ids.iter().take(size) {
+        rs.push(new_test_raft(*id, ids.clone(), et, 1, MemStorage::new()).unwrap());
+    }
+    let mut conflicts = 0;
+    for _ in 0..1000 {
+        for r in &mut rs {
+            let term = r.term;
+            match state {
+                State::Follower => r.become_follower(term + 1, INVALID_ID),
+                State::Candidate => r.become_candidate(),
+                _ => panic!("non leader state is expect!"),
+            }
+        }
+
+        let mut timeout_num = 0;
+        while timeout_num == 0 {
+            for r in &mut rs {
+                r.tick();
+                if !r.read_messages().is_empty() {
+                    timeout_num += 1;
+                }
+            }
+        }
+        // several rafts time out at the same tick
+        if timeout_num > 1 {
+            conflicts += 1;
+        }
+    }
+
+    assert!(f64::from(conflicts) / 1000.0 <= 0.3);
 }
