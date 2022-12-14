@@ -22,8 +22,8 @@ pub enum LogError {
     /// Log Unavailable
     #[error("logs from {0} to {1} are unavailable")]
     Unavailable(u64, u64),
-    /// Truncated stable log entriees is not allowed
-    #[error("Cannot truncate stable log entries [{0}, {1})")]
+    /// Truncated committed log entriees is not allowed
+    #[error("Cannot truncate committed log entries [{0}, {1})")]
     TruncateCommittedLog(u64, u64),
     /// Log entry at the give index position is unavailable
     #[error("log[{0}] is unavailable")]
