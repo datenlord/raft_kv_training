@@ -209,6 +209,7 @@ impl<T: Storage> Raft<T> {
     }
 
     /// Returns true to indicate that there will probably be some readiness need to be handled.
+    #[allow(clippy::integer_arithmetic)]
     #[inline]
     pub fn tick(&mut self) {
         self.election_elapsed += 1;
@@ -239,7 +240,7 @@ impl<T: Storage> Raft<T> {
         self.step(&m);
     }
 
-    /// Run by a leader to send MsgBeat after `self.heartbeat_timeout`
+    /// Run by a leader to send `MsgBeat` after `self.heartbeat_timeout`
     ///
     /// Returns true to indicate that there will probably be some readiness need to be handled.
     #[allow(clippy::integer_arithmetic)]
@@ -269,6 +270,7 @@ impl<T: Storage> Raft<T> {
         }
     }
 
+    /// The concreted step implementation for a leader
     #[inline]
     fn step_leader(&mut self, msg: &Message) {
         match msg.msg_data {
@@ -278,6 +280,7 @@ impl<T: Storage> Raft<T> {
         }
     }
 
+    /// The concreted step implementation for a follower
     #[inline]
     fn step_follwer(&mut self, msg: &Message) {
         match msg.msg_data {
@@ -287,6 +290,7 @@ impl<T: Storage> Raft<T> {
         }
     }
 
+    /// The concreted step implementation for a candidate
     #[inline]
     fn step_candidate(&mut self, msg: &Message) {
         match msg.msg_data {
@@ -382,12 +386,16 @@ impl<T: Storage> Raft<T> {
     /// Appends a slice of entries to the log.
     /// The entries are updated to match the current index and term.
     /// Only called by leader currently
+    #[allow(clippy::integer_arithmetic)]
     #[must_use]
+    #[inline]
     pub fn append_entry(&mut self, es: &mut [Entry]) -> bool {
         let li = self.raft_log.buffer_last_index();
-        for (i, e) in es.iter_mut().enumerate() {
+        let mut cnt = 1u64;
+        for e in es.iter_mut() {
             e.term = self.term;
-            e.index = li + 1 + i as u64;
+            e.index = li + cnt;
+            cnt += 1;
         }
         let _res = self.raft_log.append(es);
         true

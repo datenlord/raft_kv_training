@@ -26,7 +26,7 @@ impl Entry {
     #[must_use]
     #[inline]
     pub fn new(index: u64, term: u64, data: Bytes) -> Self {
-        Self { index, term, data }
+        Self { term, index, data }
     }
 }
 
