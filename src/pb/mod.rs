@@ -3,6 +3,7 @@ use eraftpb::{
     message::MsgData, MsgAppend, MsgAppendResponse, MsgBeat, MsgHeartbeat, MsgHeartbeatResponse,
     MsgHup, MsgPropose, MsgRequestVote, MsgRequestVoteResponse,
 };
+use prost::bytes::Bytes;
 
 /// raft message and relevant data structure definition
 pub(crate) mod eraftpb;
@@ -17,6 +18,15 @@ where
         let mut conf_state = ConfState::default();
         conf_state.peers.extend(nodes.into_iter());
         conf_state
+    }
+}
+
+impl Entry {
+    /// Generate a new `Entry`
+    #[must_use]
+    #[inline]
+    pub fn new(index: u64, term: u64, data: Bytes) -> Self {
+        Self { index, term, data }
     }
 }
 

@@ -1,6 +1,7 @@
+use prost::bytes::Bytes;
 use raft_kv::consensus::raft::*;
-use raft_kv::Message;
 use raft_kv::{Config, MemStorage, Raft, RaftError, Storage, INVALID_ID};
+use raft_kv::{Entry, Message};
 use std::collections::HashMap;
 use std::fmt::Debug;
 
@@ -178,6 +179,34 @@ fn test_nonleaders_election_timeout_nonconfict(state: State) {
             conflicts += 1;
         }
     }
-
     assert!(f64::from(conflicts) / 1000.0 <= 0.3);
+}
+
+// test_leader_bcast_beat tests that if the leader receives a heartbeat tick,
+// it will send a msgApp with m.Index = 0, m.LogTerm=0 and empty entries as
+// heartbeat to all followers.
+// Reference: section 5.2
+#[test]
+fn test_leader_bcast_beat() {
+    // heartbeat interval
+    let hi = 1;
+    let mut r = new_test_raft(1, vec![1, 2, 3], 10, hi, MemStorage::new()).unwrap();
+    r.become_candidate();
+    r.become_leader();
+    for i in 0..10u64 {
+        let _ = r.append_entry(&mut [Entry::new(i + 1, 0, Bytes::new())]);
+    }
+
+    for _ in 0..hi {
+        r.tick();
+    }
+
+    let mut msgs = r.read_messages();
+    msgs.sort_by_key(|m| format!("{:?}", m));
+
+    let expect_msgs = vec![
+        Message::new_heartbeat_msg(1, 2, 1),
+        Message::new_heartbeat_msg(1, 3, 1),
+    ];
+    assert_eq!(msgs, expect_msgs);
 }

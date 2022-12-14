@@ -161,7 +161,7 @@ impl<T: Storage> Raft<T> {
         self.vote = self.id;
     }
 
-    /// test now
+    /// convert this node to a leader
     #[inline]
     #[allow(clippy::integer_arithmetic)]
     pub fn become_leader(&mut self) {
@@ -210,10 +210,22 @@ impl<T: Storage> Raft<T> {
 
     /// Returns true to indicate that there will probably be some readiness need to be handled.
     #[inline]
-    pub fn tick(&mut self) -> bool {
+    pub fn tick(&mut self) {
+        self.election_elapsed += 1;
+        if self.election_elapsed >= self.random_election_timeout {
+            self.election_elapsed = 0;
+        }
         match self.role {
-            State::Follower | State::Candidate => self.tick_election(),
-            State::Leader => false,
+            State::Follower | State::Candidate => {
+                if self.election_elapsed == 0 {
+                    self.tick_election();
+                }
+            }
+            State::Leader => {
+                if self.election_elapsed != 0 {
+                    self.tick_heartbeat();
+                }
+            }
         }
     }
 
@@ -222,15 +234,22 @@ impl<T: Storage> Raft<T> {
     /// Returns true to indicate that there will probably be some readiness need to be handled.
     #[allow(clippy::integer_arithmetic)]
     #[inline]
-    pub fn tick_election(&mut self) -> bool {
-        self.election_elapsed += 1;
-        if self.election_elapsed < self.random_election_timeout {
-            return false;
-        }
-        self.election_elapsed = 0;
+    fn tick_election(&mut self) {
         let m = Message::new_hup_msg(self.id, INVALID_ID);
         self.step(&m);
-        true
+    }
+
+    /// Run by a leader to send MsgBeat after `self.heartbeat_timeout`
+    ///
+    /// Returns true to indicate that there will probably be some readiness need to be handled.
+    #[allow(clippy::integer_arithmetic)]
+    #[inline]
+    fn tick_heartbeat(&mut self) {
+        self.heartbeat_elapsed += 1;
+        if self.heartbeat_elapsed >= self.heartbeat_timeout {
+            self.heartbeat_elapsed = 0;
+            self.step(&Message::new_beat_msg(INVALID_ID, INVALID_ID));
+        }
     }
 
     /// Read messages out of the raft
@@ -243,8 +262,10 @@ impl<T: Storage> Raft<T> {
     /// message from a peer.
     #[inline]
     pub fn step(&mut self, msg: &Message) {
-        if let Some(MsgData::Hup(_m)) = msg.msg_data {
-            self.hup();
+        match msg.msg_data {
+            Some(MsgData::Hup(_m)) => self.hup(),
+            Some(MsgData::Beat(_m)) => self.bcast_heartbeat(),
+            _ => unreachable!(),
         }
     }
 
@@ -259,8 +280,6 @@ impl<T: Storage> Raft<T> {
     }
 
     /// Campaign to attempt to become a leader.
-    ///
-    /// # Errors
     #[inline]
     pub fn campaign(&mut self) {
         self.become_candidate();
@@ -282,7 +301,7 @@ impl<T: Storage> Raft<T> {
         }
     }
 
-    ///
+    /// Voting statistics
     fn poll(&mut self, id: u64, vote: bool) -> VoteResult {
         self.record_vote(id, vote);
         let res = self.tally_votes();
@@ -320,5 +339,40 @@ impl<T: Storage> Raft<T> {
         } else {
             VoteResult::Reject
         }
+    }
+
+    /// Appends a slice of entries to the log.
+    /// The entries are updated to match the current index and term.
+    /// Only called by leader currently
+    #[must_use]
+    pub fn append_entry(&mut self, es: &mut [Entry]) -> bool {
+        let li = self.raft_log.buffer_last_index();
+        for (i, e) in es.iter_mut().enumerate() {
+            e.term = self.term;
+            e.index = li + 1 + i as u64;
+        }
+        let _res = self.raft_log.append(es);
+        true
+    }
+
+    /// Broadcast heartbeat to all the followers
+    fn bcast_heartbeat(&mut self) {
+        let self_id = self.id;
+        self.progresses
+            .clone()
+            .keys()
+            .filter(|&id| *id != self_id)
+            .for_each(|id| self.send_heartbeat(*id));
+    }
+
+    /// Send a heartbeat to the given peer
+    fn send_heartbeat(&mut self, to: u64) {
+        let msg = Message::new_heartbeat_msg(self.id, to, self.term);
+        self.send(msg);
+    }
+
+    /// send the given message to the mailbox
+    fn send(&mut self, m: Message) {
+        self.msgs.push(m);
     }
 }
