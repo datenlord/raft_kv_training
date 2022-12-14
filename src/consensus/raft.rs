@@ -262,9 +262,33 @@ impl<T: Storage> Raft<T> {
     /// message from a peer.
     #[inline]
     pub fn step(&mut self, msg: &Message) {
+        match self.role {
+            State::Leader => self.step_leader(msg),
+            State::Follower => self.step_follwer(msg),
+            State::Candidate => self.step_candidate(msg),
+        }
+    }
+
+    #[inline]
+    fn step_leader(&mut self, msg: &Message) {
+        match msg.msg_data {
+            Some(MsgData::Beat(_m)) => self.bcast_heartbeat(),
+            _ => unreachable!(),
+        }
+    }
+
+    #[inline]
+    fn step_follwer(&mut self, msg: &Message) {
         match msg.msg_data {
             Some(MsgData::Hup(_m)) => self.hup(),
-            Some(MsgData::Beat(_m)) => self.bcast_heartbeat(),
+            _ => unreachable!(),
+        }
+    }
+
+    #[inline]
+    fn step_candidate(&mut self, msg: &Message) {
+        match msg.msg_data {
+            Some(MsgData::Hup(_m)) => self.hup(),
             _ => unreachable!(),
         }
     }
