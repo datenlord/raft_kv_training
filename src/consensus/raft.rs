@@ -2,7 +2,7 @@
 use crate::log::RaftLog;
 use crate::message::MsgData;
 use crate::{config::Config, INVALID_ID};
-use crate::{Entry, Message, Progress, RaftError, Storage};
+use crate::{Entry, Message, MsgHeartbeat, Progress, RaftError, Storage};
 use getset::{Getters, MutGetters, Setters};
 use rand::Rng;
 use std::collections::HashMap;
@@ -273,6 +273,7 @@ impl<T: Storage> Raft<T> {
     fn step_leader(&mut self, msg: &Message) {
         match msg.msg_data {
             Some(MsgData::Beat(_m)) => self.bcast_heartbeat(),
+            Some(MsgData::Heartbeat(m)) => self.handle_heartbeat_msg(&m),
             _ => unreachable!(),
         }
     }
@@ -280,7 +281,8 @@ impl<T: Storage> Raft<T> {
     #[inline]
     fn step_follwer(&mut self, msg: &Message) {
         match msg.msg_data {
-            Some(MsgData::Hup(_m)) => self.hup(),
+            Some(MsgData::Hup(_m)) => self.handle_hup_msg(),
+            Some(MsgData::Heartbeat(m)) => self.handle_heartbeat_msg(&m),
             _ => unreachable!(),
         }
     }
@@ -288,19 +290,31 @@ impl<T: Storage> Raft<T> {
     #[inline]
     fn step_candidate(&mut self, msg: &Message) {
         match msg.msg_data {
-            Some(MsgData::Hup(_m)) => self.hup(),
+            Some(MsgData::Hup(_m)) => self.handle_hup_msg(),
+            Some(MsgData::Heartbeat(m)) => self.handle_heartbeat_msg(&m),
             _ => unreachable!(),
         }
     }
 
     /// hup message's handler
     #[allow(clippy::integer_arithmetic)]
-    fn hup(&mut self) {
+    fn handle_hup_msg(&mut self) {
         if self.role == State::Leader {
-            // output some log
             return;
         }
         self.campaign();
+    }
+
+    /// heartbeat message's handler
+    fn handle_heartbeat_msg(&mut self, msg: &MsgHeartbeat) {
+        let reject = if self.term > msg.term {
+            true
+        } else {
+            self.become_follower(msg.term, msg.from);
+            false
+        };
+        let heartbeat_reply = Message::new_heartbeat_resp_msg(self.id, msg.from, self.term, reject);
+        self.send(heartbeat_reply);
     }
 
     /// Campaign to attempt to become a leader.

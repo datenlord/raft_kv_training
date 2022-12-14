@@ -210,3 +210,96 @@ fn test_leader_bcast_beat() {
     ];
     assert_eq!(msgs, expect_msgs);
 }
+
+#[test]
+fn test_follower_handle_heartbeat() {
+    let tests = vec![
+        (
+            Message::new_heartbeat_msg(2, 1, 1),
+            Message::new_heartbeat_resp_msg(1, 2, 2, true),
+            2,
+        ),
+        (
+            Message::new_heartbeat_msg(2, 1, 2),
+            Message::new_heartbeat_resp_msg(1, 2, 2, false),
+            2,
+        ),
+        (
+            Message::new_heartbeat_msg(2, 1, 3),
+            Message::new_heartbeat_resp_msg(1, 2, 3, false),
+            3,
+        ),
+    ];
+    for (msg, w_reply, w_term) in tests {
+        let mut r = new_test_raft(1, vec![1, 2], 5, 1, MemStorage::new()).unwrap();
+        r.become_follower(2, 2);
+        r.step(&msg);
+        let msgs = r.read_messages();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0], w_reply);
+        assert_eq!(r.term, w_term);
+    }
+}
+
+#[test]
+fn test_candidate_handle_heartbeat() {
+    let successes = vec![
+        (
+            Message::new_heartbeat_msg(2, 1, 2),
+            Message::new_heartbeat_resp_msg(1, 2, 2, false),
+            2,
+        ),
+        (
+            Message::new_heartbeat_msg(2, 1, 3),
+            Message::new_heartbeat_resp_msg(1, 2, 3, false),
+            3,
+        ),
+    ];
+    for (msg, w_reply, w_term) in successes {
+        for state in [State::Follower, State::Candidate, State::Leader] {
+            let mut r = new_test_raft(1, vec![1, 2], 5, 1, MemStorage::new()).unwrap();
+            match state {
+                State::Follower => r.become_follower(2, 2),
+                State::Candidate => {
+                    r.become_follower(1, 2);
+                    r.become_candidate();
+                }
+                State::Leader => {
+                    r.become_follower(1, 2);
+                    r.become_candidate();
+                    r.become_leader();
+                }
+                _ => unreachable!(),
+            }
+            r.step(&msg);
+            let msgs = r.read_messages();
+            assert_eq!(msgs.len(), 1);
+            assert_eq!(msgs[0], w_reply);
+            assert_eq!(r.term, w_term);
+            assert_eq!(r.role, State::Follower);
+        }
+    }
+
+    for state in [State::Follower, State::Candidate, State::Leader] {
+        let mut r = new_test_raft(1, vec![1, 2], 5, 1, MemStorage::new()).unwrap();
+        match state {
+            State::Follower => r.become_follower(2, 2),
+            State::Candidate => {
+                r.become_follower(1, 2);
+                r.become_candidate();
+            }
+            State::Leader => {
+                r.become_follower(1, 2);
+                r.become_candidate();
+                r.become_leader();
+            }
+            _ => unreachable!(),
+        }
+        r.step(&Message::new_heartbeat_msg(2, 1, 1));
+        let msgs = r.read_messages();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0], Message::new_heartbeat_resp_msg(1, 2, 2, true));
+        assert_eq!(r.term, 2);
+        assert_eq!(r.role, state);
+    }
+}
