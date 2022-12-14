@@ -212,37 +212,7 @@ fn test_leader_bcast_beat() {
 }
 
 #[test]
-fn test_follower_handle_heartbeat() {
-    let tests = vec![
-        (
-            Message::new_heartbeat_msg(2, 1, 1),
-            Message::new_heartbeat_resp_msg(1, 2, 2, true),
-            2,
-        ),
-        (
-            Message::new_heartbeat_msg(2, 1, 2),
-            Message::new_heartbeat_resp_msg(1, 2, 2, false),
-            2,
-        ),
-        (
-            Message::new_heartbeat_msg(2, 1, 3),
-            Message::new_heartbeat_resp_msg(1, 2, 3, false),
-            3,
-        ),
-    ];
-    for (msg, w_reply, w_term) in tests {
-        let mut r = new_test_raft(1, vec![1, 2], 5, 1, MemStorage::new()).unwrap();
-        r.become_follower(2, 2);
-        r.step(&msg);
-        let msgs = r.read_messages();
-        assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0], w_reply);
-        assert_eq!(r.term, w_term);
-    }
-}
-
-#[test]
-fn test_candidate_handle_heartbeat() {
+fn test_handle_heartbeat() {
     let successes = vec![
         (
             Message::new_heartbeat_msg(2, 1, 2),
@@ -302,4 +272,16 @@ fn test_candidate_handle_heartbeat() {
         assert_eq!(r.term, 2);
         assert_eq!(r.role, state);
     }
+}
+
+// test_handle_heartbeat_resp ensures that we re-send log entries when we get a heartbeat response.
+#[test]
+fn test_handle_heartbeat_resp() {
+    let mut r = new_test_raft(1, vec![1, 2], 5, 1, MemStorage::new()).unwrap();
+    r.become_candidate();
+    r.become_leader();
+    r.step(&Message::new_heartbeat_resp_msg(2, 1, 1, false));
+    assert_eq!(r.role, State::Leader);
+    r.step(&Message::new_heartbeat_resp_msg(2, 1, 2, true));
+    assert_eq!(r.role, State::Follower);
 }

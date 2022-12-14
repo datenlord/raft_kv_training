@@ -2,7 +2,7 @@
 use crate::log::RaftLog;
 use crate::message::MsgData;
 use crate::{config::Config, INVALID_ID};
-use crate::{Entry, Message, MsgHeartbeat, Progress, RaftError, Storage};
+use crate::{Entry, Message, MsgHeartbeat, MsgHeartbeatResponse, Progress, RaftError, Storage};
 use getset::{Getters, MutGetters, Setters};
 use rand::Rng;
 use std::collections::HashMap;
@@ -276,6 +276,7 @@ impl<T: Storage> Raft<T> {
         match msg.msg_data {
             Some(MsgData::Beat(_m)) => self.bcast_heartbeat(),
             Some(MsgData::Heartbeat(m)) => self.handle_heartbeat_msg(&m),
+            Some(MsgData::HeartbeatResponse(m)) => self.handle_heartbeat_reply(&m),
             _ => unreachable!(),
         }
     }
@@ -319,6 +320,13 @@ impl<T: Storage> Raft<T> {
         };
         let heartbeat_reply = Message::new_heartbeat_resp_msg(self.id, msg.from, self.term, reject);
         self.send(heartbeat_reply);
+    }
+
+    /// heartbeat message's handler
+    fn handle_heartbeat_reply(&mut self, msg: &MsgHeartbeatResponse) {
+        if msg.reject {
+            self.become_follower(msg.term, INVALID_ID);
+        }
     }
 
     /// Campaign to attempt to become a leader.
