@@ -17,7 +17,7 @@ where
     }
 }
 
-pub fn new_test_raft(
+fn new_test_raft(
     id: u64,
     peers: Vec<u64>,
     election: usize,
@@ -32,6 +32,10 @@ pub fn new_test_raft(
         storage.initialize_with_conf_state(peers);
     }
     Raft::new(&config, storage)
+}
+
+fn empty_entry(term: u64, index: u64) -> Entry {
+    Entry::new(index, term, Bytes::new())
 }
 
 #[test]
@@ -194,7 +198,7 @@ fn test_leader_bcast_beat() {
     r.become_candidate();
     r.become_leader();
     for i in 0..10u64 {
-        let _ = r.append_entry(&mut [Entry::new(i + 1, 0, Bytes::new())]);
+        let _ = r.append_entry(&mut [empty_entry(0, i + 1)]);
     }
 
     for _ in 0..hi {
@@ -314,5 +318,41 @@ fn test_follower_vote() {
         let reply = Message::new_request_vote_resp_msg(1, nvote, 1, wreject);
         let expect_msgs = vec![reply];
         assert_eq!(msgs, expect_msgs);
+    }
+}
+
+// test_voter tests the voter denies its vote if its own log is more up-to-date
+// than that of the candidate.
+// Reference: section 5.4.1
+#[test]
+fn test_voter() {
+    let tests = vec![
+        // same logterm
+        (vec![empty_entry(1, 1)], 1, 1, false),
+        (vec![empty_entry(1, 1)], 1, 2, false),
+        (vec![empty_entry(1, 1), empty_entry(1, 2)], 1, 1, true),
+        // candidate higher logterm
+        (vec![empty_entry(1, 1)], 2, 1, false),
+        (vec![empty_entry(1, 1)], 2, 2, false),
+        (vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 1, false),
+        // voter higher logterm
+        (vec![empty_entry(2, 1)], 1, 1, true),
+        (vec![empty_entry(2, 1)], 1, 2, true),
+        (vec![empty_entry(2, 1), empty_entry(2, 2)], 1, 1, true),
+    ];
+
+    for (ents, log_term, index, wreject) in tests {
+        let s = MemStorage::new();
+        s.wl().append(&ents).unwrap();
+        let mut r = new_test_raft(1, vec![1, 2], 10, 1, s).unwrap();
+        let m = Message::new_request_vote_msg(2, 1, 3, index, log_term);
+        r.step(&m);
+
+        let msgs = r.read_messages();
+        assert!(msgs.len() == 1);
+        assert_eq!(
+            msgs[0],
+            Message::new_request_vote_resp_msg(1, 2, 3, wreject)
+        );
     }
 }

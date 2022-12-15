@@ -334,12 +334,22 @@ impl<T: Storage> Raft<T> {
         }
     }
 
+    /// raft log integrit check
+    /// return true indicates that we should reject the vote request
+    fn log_integrity_check(&self, log_index: u64, log_term: u64) -> bool {
+        let last_log_term = self.raft_log.last_term();
+        last_log_term > log_term
+            || (last_log_term == log_term && self.raft_log.buffer_last_index() > log_index)
+    }
+
     /// request vote message's handler
     fn handle_request_vote_msg(&mut self, msg: &MsgRequestVote) {
         let reject = match self.term.cmp(&msg.term) {
             Ordering::Greater => true,
             Ordering::Equal => {
-                if self.vote != INVALID_ID && self.vote != msg.from {
+                if (self.vote != INVALID_ID && self.vote != msg.from)
+                    || self.log_integrity_check(msg.last_log_index, msg.last_log_term)
+                {
                     true
                 } else {
                     self.vote = msg.from;
@@ -347,9 +357,13 @@ impl<T: Storage> Raft<T> {
                 }
             }
             Ordering::Less => {
-                self.term = msg.term;
-                self.vote = msg.from;
-                false
+                self.become_follower(msg.term, INVALID_ID);
+                if self.log_integrity_check(msg.last_log_index, msg.last_log_term) {
+                    true
+                } else {
+                    self.vote = msg.from;
+                    false
+                }
             }
         };
 
