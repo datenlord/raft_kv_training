@@ -68,7 +68,7 @@ pub struct Raft<T: Storage> {
     /// current term
     pub term: u64,
     /// which candidate is this peer to voted for
-    vote: u64,
+    pub vote: u64,
     /// this peer's role
     pub role: State,
 
@@ -268,6 +268,7 @@ impl<T: Storage> Raft<T> {
             Some(MsgData::Beat(_m)) => self.bcast_heartbeat(),
             Some(MsgData::Heartbeat(m)) => self.handle_heartbeat_msg(&m),
             Some(MsgData::HeartbeatResponse(m)) => self.handle_heartbeat_reply(&m),
+            Some(MsgData::RequestVote(m)) => self.handle_request_vote_msg(&m),
             _ => unreachable!(),
         }
     }
@@ -289,6 +290,7 @@ impl<T: Storage> Raft<T> {
         match msg.msg_data {
             Some(MsgData::Hup(_m)) => self.handle_hup_msg(),
             Some(MsgData::Heartbeat(m)) => self.handle_heartbeat_msg(&m),
+            Some(MsgData::RequestVote(m)) => self.handle_request_vote_msg(&m),
             _ => unreachable!(),
         }
     }

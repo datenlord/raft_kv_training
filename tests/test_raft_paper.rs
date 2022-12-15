@@ -356,3 +356,39 @@ fn test_voter() {
         );
     }
 }
+
+#[test]
+fn test_vote_from_any_state() {
+    for state in [State::Follower, State::Candidate, State::Leader] {
+        let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new()).unwrap();
+        r.term = 1;
+        match state {
+            State::Follower => {
+                let term = r.term;
+                r.become_follower(term, 3);
+            }
+            State::Candidate => r.become_candidate(),
+            State::Leader => {
+                r.become_candidate();
+                r.become_leader();
+            }
+            _ => unreachable!(),
+        }
+        // Note that setting our state above may have advanced r.term
+        // past its initial value.
+        let new_term = r.term + 1;
+
+        let msg = Message::new_request_vote_msg(2, 1, new_term, 42, new_term);
+        r.step(&msg);
+        let msgs = r.read_messages();
+
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(
+            msgs[0],
+            Message::new_request_vote_resp_msg(1, 2, new_term, false)
+        );
+
+        assert_eq!(r.role, State::Follower);
+        assert_eq!(r.vote, 2);
+    }
+}
