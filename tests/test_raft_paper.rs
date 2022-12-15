@@ -445,3 +445,14 @@ fn test_leader_election_in_one_round_rpc() {
         assert_eq!(r.term, 1);
     }
 }
+
+// test_candidate_reset_term tests when a candidate receives a
+// MsgHeartbeat from leader, "step" resets the term
+// with leader's and reverts back to follower.
+#[test]
+fn test_candidate_reset_term_msg_heartbeat() {
+    let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new()).unwrap();
+    r.become_candidate();
+    r.step(&Message::new_heartbeat_msg(2, 1, 3));
+    assert_eq!(r.role, State::Follower);
+}
