@@ -2,9 +2,13 @@
 use crate::log::RaftLog;
 use crate::message::MsgData;
 use crate::{config::Config, INVALID_ID};
-use crate::{Entry, Message, MsgHeartbeat, MsgHeartbeatResponse, Progress, RaftError, Storage};
+use crate::{
+    Entry, HardState, LogError, Message, MsgHeartbeat, MsgHeartbeatResponse, MsgRequestVote,
+    Progress, RaftError, Storage,
+};
 use getset::{Getters, MutGetters, Setters};
 use rand::Rng;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Display;
 
@@ -209,7 +213,6 @@ impl<T: Storage> Raft<T> {
     }
 
     /// Run by each peer in a raft cluster to advance the logical clock
-    #[allow(clippy::integer_arithmetic)]
     #[inline]
     pub fn tick(&mut self) {
         match self.role {
@@ -219,6 +222,7 @@ impl<T: Storage> Raft<T> {
     }
 
     /// Run by followers and candidates after `self.election_timeout`.
+    #[allow(clippy::integer_arithmetic)]
     #[inline]
     fn tick_election(&mut self) {
         self.election_elapsed += 1;
@@ -274,6 +278,7 @@ impl<T: Storage> Raft<T> {
         match msg.msg_data {
             Some(MsgData::Hup(_m)) => self.handle_hup_msg(),
             Some(MsgData::Heartbeat(m)) => self.handle_heartbeat_msg(&m),
+            Some(MsgData::RequestVote(m)) => self.handle_request_vote_msg(&m),
             _ => unreachable!(),
         }
     }
@@ -326,6 +331,56 @@ impl<T: Storage> Raft<T> {
     fn handle_heartbeat_reply(&mut self, msg: &MsgHeartbeatResponse) {
         if msg.reject {
             self.become_follower(msg.term, INVALID_ID);
+        }
+    }
+
+    /// request vote message's handler
+    fn handle_request_vote_msg(&mut self, msg: &MsgRequestVote) {
+        let reject = match self.term.cmp(&msg.term) {
+            Ordering::Greater => true,
+            Ordering::Equal => {
+                if self.vote != INVALID_ID && self.vote != msg.from {
+                    true
+                } else {
+                    self.vote = msg.from;
+                    false
+                }
+            }
+            Ordering::Less => {
+                self.term = msg.term;
+                self.vote = msg.from;
+                false
+            }
+        };
+
+        let request_vote_reply =
+            Message::new_request_vote_resp_msg(self.id, msg.from, self.term, reject);
+        self.send(request_vote_reply);
+    }
+
+    /// Load the given `hardstate` into self
+    ///
+    /// # Errors
+    ///
+    /// Return `TruncateCommittedLog` if `hs.committed` is less than `self.raft_log.committed`.
+    #[allow(clippy::integer_arithmetic)]
+    #[inline]
+    pub fn load_state(&mut self, hs: &HardState) -> Result<(), RaftError> {
+        if hs.committed < self.raft_log.committed {
+            Err(RaftError::Log(LogError::TruncateCommittedLog(
+                hs.committed,
+                self.raft_log.committed,
+            )))
+        } else if hs.committed > self.raft_log.buffer_last_index() {
+            Err(RaftError::Log(LogError::Unavailable(
+                self.raft_log.buffer_last_index() + 1,
+                hs.committed,
+            )))
+        } else {
+            self.raft_log.committed = hs.committed;
+            self.term = hs.term;
+            self.vote = hs.voted_for;
+            Ok(())
         }
     }
 

@@ -1,4 +1,4 @@
-use crate::{ConfState, Entry, Message};
+use crate::{ConfState, Entry, HardState, Message};
 use eraftpb::{
     message::MsgData, MsgAppend, MsgAppendResponse, MsgBeat, MsgHeartbeat, MsgHeartbeatResponse,
     MsgHup, MsgPropose, MsgRequestVote, MsgRequestVoteResponse,
@@ -18,6 +18,20 @@ where
         let mut conf_state = ConfState::default();
         conf_state.peers.extend(nodes.into_iter());
         conf_state
+    }
+}
+
+impl HardState {
+    /// Generate a new `HardState`
+    #[must_use]
+    #[inline]
+    pub fn new(term: u64, voted_for: u64, committed: u64, applied: u64) -> Self {
+        Self {
+            term,
+            voted_for,
+            committed,
+            applied,
+        }
     }
 }
 

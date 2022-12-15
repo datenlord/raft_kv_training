@@ -1,6 +1,6 @@
 use prost::bytes::Bytes;
 use raft_kv::consensus::raft::*;
-use raft_kv::{Config, MemStorage, Raft, RaftError, Storage, INVALID_ID};
+use raft_kv::{Config, HardState, MemStorage, Raft, RaftError, Storage, INVALID_ID};
 use raft_kv::{Entry, Message};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -284,4 +284,35 @@ fn test_handle_heartbeat_resp() {
     assert_eq!(r.role, State::Leader);
     r.step(&Message::new_heartbeat_resp_msg(2, 1, 2, true));
     assert_eq!(r.role, State::Follower);
+}
+
+// test_follower_vote tests that each follower will vote for at most one
+// candidate in a given term, on a first-come-first-served basis.
+// Reference: section 5.2
+#[test]
+fn test_follower_vote() {
+    let tests = vec![
+        (INVALID_ID, 1, false),
+        (INVALID_ID, 2, false),
+        (1, 1, false),
+        (2, 2, false),
+        (1, 2, true),
+        (2, 1, true),
+    ];
+    for (vote, nvote, wreject) in tests {
+        let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new()).unwrap();
+        r.load_state(&HardState::new(1, vote, 0, 0)).unwrap();
+        let msg = Message::new_request_vote_msg(
+            nvote,
+            1,
+            1,
+            r.raft_log.buffer_last_index(),
+            r.raft_log.last_term(),
+        );
+        r.step(&msg);
+        let msgs = r.read_messages();
+        let reply = Message::new_request_vote_resp_msg(1, nvote, 1, wreject);
+        let expect_msgs = vec![reply];
+        assert_eq!(msgs, expect_msgs);
+    }
 }
