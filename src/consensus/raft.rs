@@ -208,41 +208,28 @@ impl<T: Storage> Raft<T> {
         }
     }
 
-    /// Returns true to indicate that there will probably be some readiness need to be handled.
+    /// Run by each peer in a raft cluster to advance the logical clock
     #[allow(clippy::integer_arithmetic)]
     #[inline]
     pub fn tick(&mut self) {
-        self.election_elapsed += 1;
-        if self.election_elapsed >= self.random_election_timeout {
-            self.election_elapsed = 0;
-        }
         match self.role {
-            State::Follower | State::Candidate => {
-                if self.election_elapsed == 0 {
-                    self.tick_election();
-                }
-            }
-            State::Leader => {
-                if self.election_elapsed != 0 {
-                    self.tick_heartbeat();
-                }
-            }
+            State::Follower | State::Candidate => self.tick_election(),
+            State::Leader => self.tick_heartbeat(),
         }
     }
 
     /// Run by followers and candidates after `self.election_timeout`.
-    ///
-    /// Returns true to indicate that there will probably be some readiness need to be handled.
-    #[allow(clippy::integer_arithmetic)]
     #[inline]
     fn tick_election(&mut self) {
-        let m = Message::new_hup_msg(self.id, INVALID_ID);
-        self.step(&m);
+        self.election_elapsed += 1;
+        if self.election_elapsed >= self.random_election_timeout {
+            self.election_elapsed = 0;
+            let m = Message::new_hup_msg(self.id, INVALID_ID);
+            self.step(&m);
+        }
     }
 
     /// Run by a leader to send `MsgBeat` after `self.heartbeat_timeout`
-    ///
-    /// Returns true to indicate that there will probably be some readiness need to be handled.
     #[allow(clippy::integer_arithmetic)]
     #[inline]
     fn tick_heartbeat(&mut self) {
@@ -304,10 +291,23 @@ impl<T: Storage> Raft<T> {
     /// hup message's handler
     #[allow(clippy::integer_arithmetic)]
     fn handle_hup_msg(&mut self) {
-        if self.role == State::Leader {
+        self.become_candidate();
+        let last_log_term = self.raft_log.last_term();
+        let last_log_index = self.raft_log.buffer_last_index();
+        let term = self.term;
+        let self_id = self.id;
+
+        if VoteResult::Grant == self.poll(self_id, true) {
             return;
         }
-        self.campaign();
+        for &id in self.progresses.clone().keys() {
+            if id == self_id {
+                continue;
+            }
+            let vote_req_msg =
+                Message::new_request_vote_msg(self_id, id, term, last_log_term, last_log_index);
+            self.send(vote_req_msg);
+        }
     }
 
     /// heartbeat message's handler
@@ -326,28 +326,6 @@ impl<T: Storage> Raft<T> {
     fn handle_heartbeat_reply(&mut self, msg: &MsgHeartbeatResponse) {
         if msg.reject {
             self.become_follower(msg.term, INVALID_ID);
-        }
-    }
-
-    /// Campaign to attempt to become a leader.
-    #[inline]
-    pub fn campaign(&mut self) {
-        self.become_candidate();
-        let last_log_term = self.raft_log.last_term();
-        let last_log_index = self.raft_log.buffer_last_index();
-        let term = self.term;
-        let self_id = self.id;
-
-        if VoteResult::Grant == self.poll(self_id, true) {
-            return;
-        }
-        for &id in self.progresses.keys() {
-            if id == self_id {
-                continue;
-            }
-            let vote_req_msg =
-                Message::new_request_vote_msg(self_id, id, term, last_log_term, last_log_index);
-            self.msgs.push(vote_req_msg);
         }
     }
 
