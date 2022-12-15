@@ -4,7 +4,7 @@ use crate::message::MsgData;
 use crate::{config::Config, INVALID_ID};
 use crate::{
     Entry, HardState, LogError, Message, MsgHeartbeat, MsgHeartbeatResponse, MsgRequestVote,
-    Progress, RaftError, Storage,
+    MsgRequestVoteResponse, Progress, RaftError, Storage,
 };
 use getset::{Getters, MutGetters, Setters};
 use rand::Rng;
@@ -269,6 +269,7 @@ impl<T: Storage> Raft<T> {
             Some(MsgData::Heartbeat(m)) => self.handle_heartbeat_msg(&m),
             Some(MsgData::HeartbeatResponse(m)) => self.handle_heartbeat_reply(&m),
             Some(MsgData::RequestVote(m)) => self.handle_request_vote_msg(&m),
+            Some(MsgData::RequestVoteResponse(m)) => self.handle_request_vote_reply(&m),
             _ => unreachable!(),
         }
     }
@@ -280,6 +281,7 @@ impl<T: Storage> Raft<T> {
             Some(MsgData::Hup(_m)) => self.handle_hup_msg(),
             Some(MsgData::Heartbeat(m)) => self.handle_heartbeat_msg(&m),
             Some(MsgData::RequestVote(m)) => self.handle_request_vote_msg(&m),
+            Some(MsgData::RequestVoteResponse(m)) => self.handle_request_vote_reply(&m),
             _ => unreachable!(),
         }
     }
@@ -291,6 +293,7 @@ impl<T: Storage> Raft<T> {
             Some(MsgData::Hup(_m)) => self.handle_hup_msg(),
             Some(MsgData::Heartbeat(m)) => self.handle_heartbeat_msg(&m),
             Some(MsgData::RequestVote(m)) => self.handle_request_vote_msg(&m),
+            Some(MsgData::RequestVoteResponse(m)) => self.handle_request_vote_reply(&m),
             _ => unreachable!(),
         }
     }
@@ -374,6 +377,17 @@ impl<T: Storage> Raft<T> {
         self.send(request_vote_reply);
     }
 
+    /// request vote reply message's handler
+    fn handle_request_vote_reply(&mut self, msg: &MsgRequestVoteResponse) {
+        if msg.term > self.term {
+            self.become_follower(msg.term, INVALID_ID);
+        } else if self.role == State::Candidate {
+            let _res = self.poll(msg.from, !msg.reject);
+        } else {
+            // make clippy happy
+        }
+    }
+
     /// Load the given `hardstate` into self
     ///
     /// # Errors
@@ -420,7 +434,11 @@ impl<T: Storage> Raft<T> {
     /// instance if v == true (and declined it otherwise).
     #[inline]
     pub fn record_vote(&mut self, id: u64, vote: bool) {
-        let _res = self.votes.entry(id).or_insert(vote);
+        let _res = self
+            .votes
+            .entry(id)
+            .and_modify(|val| *val = vote)
+            .or_insert(vote);
     }
 
     /// `tally_votes` returns the result of the election quorum
@@ -430,7 +448,7 @@ impl<T: Storage> Raft<T> {
         let majority = (self.progresses.len() / 2) + 1;
         let granted = self.votes.values().filter(|&&v| v).count();
         let rejected = self.votes.len() - granted;
-        let missing = self.votes.capacity() - granted - rejected;
+        let missing = self.progresses.len() - granted - rejected;
         if granted >= majority {
             VoteResult::Grant
         } else if granted + missing >= majority {

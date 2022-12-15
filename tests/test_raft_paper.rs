@@ -1,7 +1,7 @@
 use prost::bytes::Bytes;
 use raft_kv::consensus::raft::*;
+use raft_kv::{map, Entry, Message};
 use raft_kv::{Config, HardState, MemStorage, Raft, RaftError, Storage, INVALID_ID};
-use raft_kv::{Entry, Message};
 use std::collections::HashMap;
 use std::fmt::Debug;
 
@@ -390,5 +390,58 @@ fn test_vote_from_any_state() {
 
         assert_eq!(r.role, State::Follower);
         assert_eq!(r.vote, 2);
+    }
+}
+
+// test_leader_election_in_one_round_rpc tests all cases that may happen in
+// leader election during one round of RequestVote RPC:
+// a) it wins the election
+// b) it loses the election
+// c) it is unclear about the result
+// Reference: section 5.2
+#[test]
+fn test_leader_election_in_one_round_rpc() {
+    let tests = vec![
+        // win the election when receiving votes from a majority of the servers
+        (1, map!(), State::Leader),
+        (3, map!(2 => true, 3 => true), State::Leader),
+        (3, map!(2 => true), State::Leader),
+        (
+            5,
+            map!(2 => true, 3 => true, 4 => true, 5 => true),
+            State::Leader,
+        ),
+        (5, map!(2 => true, 3 => true, 4 => true), State::Leader),
+        (5, map!(2 => true, 3 => true), State::Leader),
+        // return to follower state if it receives vote denial from a majority
+        (3, map!(2 => false, 3 => false), State::Follower),
+        (
+            5,
+            map!(2 => false, 3 => false, 4 => false, 5 => false),
+            State::Follower,
+        ),
+        (
+            5,
+            map!(2 => true, 3 => false, 4 => false, 5 => false),
+            State::Follower,
+        ),
+        // stay in candidate if it does not obtain the majority
+        (3, map!(), State::Candidate),
+        (5, map!(2 => true), State::Candidate),
+        (5, map!(2 => false, 3 => false), State::Candidate),
+        (5, map!(), State::Candidate),
+    ];
+
+    for (size, votes, state) in tests {
+        let mut r =
+            new_test_raft(1, (1..=size as u64).collect(), 10, 1, MemStorage::new()).unwrap();
+
+        r.step(&Message::new_hup_msg(1, 1));
+        for (id, vote) in votes {
+            let m = Message::new_request_vote_resp_msg(id, 1, r.term, !vote);
+            r.step(&m);
+        }
+        assert_eq!(r.role, state);
+        assert_eq!(r.term, 1);
     }
 }
