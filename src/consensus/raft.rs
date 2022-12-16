@@ -265,6 +265,7 @@ impl<T: Storage> Raft<T> {
     #[inline]
     fn step_leader(&mut self, msg: &Message) {
         match msg.msg_data {
+            Some(MsgData::Hup(_m)) => (),
             Some(MsgData::Beat(_m)) => self.bcast_heartbeat(),
             Some(MsgData::Heartbeat(m)) => self.handle_heartbeat_msg(&m),
             Some(MsgData::HeartbeatResponse(m)) => self.handle_heartbeat_reply(&m),
