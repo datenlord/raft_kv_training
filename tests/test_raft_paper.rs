@@ -456,3 +456,17 @@ fn test_candidate_reset_term_msg_heartbeat() {
     r.step(&Message::new_heartbeat_msg(2, 1, 3));
     assert_eq!(r.role, State::Follower);
 }
+
+#[test]
+fn test_campaign_while_leader() {
+    let mut r = new_test_raft(1, vec![1], 5, 1, MemStorage::new()).unwrap();
+    assert_eq!(r.role, State::Follower);
+    // We don't call campaign() directly because it comes after the check
+    // for our current state.
+    r.step(&Message::new_hup_msg(1, 1));
+    assert_eq!(r.role, State::Leader);
+    let term = r.term;
+    r.step(&Message::new_hup_msg(1, 1));
+    assert_eq!(r.role, State::Leader);
+    assert_eq!(r.term, term);
+}
