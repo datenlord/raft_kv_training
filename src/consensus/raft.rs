@@ -307,9 +307,7 @@ impl<T: Storage> Raft<T> {
         let term = self.term;
         let self_id = self.id;
 
-        if VoteResult::Grant == self.poll(self_id, true) {
-            return;
-        }
+        self.poll(self_id, true);
         for &id in self.progresses.clone().keys() {
             if id == self_id {
                 continue;
@@ -382,7 +380,7 @@ impl<T: Storage> Raft<T> {
         if msg.term > self.term {
             self.become_follower(msg.term, INVALID_ID);
         } else if self.role == State::Candidate {
-            let _res = self.poll(msg.from, !msg.reject);
+            self.poll(msg.from, !msg.reject);
         } else {
             // make clippy happy
         }
@@ -415,10 +413,9 @@ impl<T: Storage> Raft<T> {
     }
 
     /// Voting statistics
-    fn poll(&mut self, id: u64, vote: bool) -> VoteResult {
+    fn poll(&mut self, id: u64, vote: bool) {
         self.record_vote(id, vote);
-        let res = self.tally_votes();
-        match res {
+        match self.tally_votes() {
             VoteResult::Grant => {
                 self.become_leader();
             }
@@ -427,7 +424,6 @@ impl<T: Storage> Raft<T> {
             }
             VoteResult::Pending => (),
         }
-        res
     }
 
     /// Records that the node with the given id voted for this Raft
