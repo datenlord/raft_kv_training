@@ -3,8 +3,8 @@ use crate::log::RaftLog;
 use crate::message::MsgData;
 use crate::{config::Config, INVALID_ID};
 use crate::{
-    Entry, HardState, LogError, Message, MsgHeartbeat, MsgHeartbeatResponse, MsgRequestVote,
-    MsgRequestVoteResponse, Progress, RaftError, Storage,
+    Entry, HardState, LogError, Message, MsgAppend, MsgHeartbeat, MsgHeartbeatResponse,
+    MsgRequestVote, MsgRequestVoteResponse, Progress, RaftError, Storage,
 };
 use getset::{Getters, MutGetters, Setters};
 use rand::Rng;
@@ -271,6 +271,7 @@ impl<T: Storage> Raft<T> {
             Some(MsgData::HeartbeatResponse(m)) => self.handle_heartbeat_reply(&m),
             Some(MsgData::RequestVote(m)) => self.handle_request_vote_msg(&m),
             Some(MsgData::RequestVoteResponse(m)) => self.handle_request_vote_reply(&m),
+            Some(MsgData::Append(ref m)) => self.handle_append_entries_msg(m),
             _ => unreachable!(),
         }
     }
@@ -280,9 +281,10 @@ impl<T: Storage> Raft<T> {
     fn step_follwer(&mut self, msg: &Message) {
         match msg.msg_data {
             Some(MsgData::Hup(_m)) => self.handle_hup_msg(),
-            Some(MsgData::Heartbeat(m)) => self.handle_heartbeat_msg(&m),
-            Some(MsgData::RequestVote(m)) => self.handle_request_vote_msg(&m),
-            Some(MsgData::RequestVoteResponse(m)) => self.handle_request_vote_reply(&m),
+            Some(MsgData::Heartbeat(ref m)) => self.handle_heartbeat_msg(m),
+            Some(MsgData::RequestVote(ref m)) => self.handle_request_vote_msg(m),
+            Some(MsgData::RequestVoteResponse(ref m)) => self.handle_request_vote_reply(m),
+            Some(MsgData::Append(ref m)) => self.handle_append_entries_msg(m),
             _ => unreachable!(),
         }
     }
@@ -295,6 +297,7 @@ impl<T: Storage> Raft<T> {
             Some(MsgData::Heartbeat(m)) => self.handle_heartbeat_msg(&m),
             Some(MsgData::RequestVote(m)) => self.handle_request_vote_msg(&m),
             Some(MsgData::RequestVoteResponse(m)) => self.handle_request_vote_reply(&m),
+            Some(MsgData::Append(ref m)) => self.handle_append_entries_msg(m),
             _ => unreachable!(),
         }
     }
@@ -385,6 +388,37 @@ impl<T: Storage> Raft<T> {
         } else {
             // make clippy happy
         }
+    }
+
+    /// do append and then commit as a follower
+    fn do_append_as_a_follower(&mut self, msg: &MsgAppend) -> bool {
+        self.become_follower(msg.term, msg.from);
+        self.raft_log.append(&msg.entries[..]).is_err()
+            || self.raft_log.commit_to(msg.leader_commit).is_err()
+    }
+
+    /// append entries message's handler
+    fn handle_append_entries_msg(&mut self, msg: &MsgAppend) {
+        let reject = match self.term.cmp(&msg.term) {
+            Ordering::Greater => true,
+            Ordering::Equal => {
+                if self.role == State::Leader {
+                    unreachable!("Never allow two leader in the same term in a raft cluster!!")
+                }
+                self.do_append_as_a_follower(msg)
+            }
+            Ordering::Less => self.do_append_as_a_follower(msg),
+        };
+
+        let append_reply = Message::new_append_resp_msg(
+            self.id,
+            msg.from,
+            self.term,
+            reject,
+            self.raft_log.buffer_last_index(),
+            self.raft_log.last_term(),
+        );
+        self.send(append_reply);
     }
 
     /// Load the given `hardstate` into self

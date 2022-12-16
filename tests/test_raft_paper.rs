@@ -470,3 +470,41 @@ fn test_campaign_while_leader() {
     assert_eq!(r.role, State::Leader);
     assert_eq!(r.term, term);
 }
+
+#[test]
+fn test_follower_update_term_from_message() {
+    test_update_term_from_message(State::Follower);
+}
+
+#[test]
+fn test_candidate_update_term_from_message() {
+    test_update_term_from_message(State::Candidate);
+}
+
+#[test]
+fn test_leader_update_term_from_message() {
+    test_update_term_from_message(State::Leader);
+}
+
+// test_update_term_from_message tests that if one server’s current term is
+// smaller than the other’s, then it updates its current term to the larger
+// value. If a candidate or leader discovers that its term is out of date,
+// it immediately reverts to follower state.
+// Reference: section 5.1
+fn test_update_term_from_message(state: State) {
+    let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new()).unwrap();
+    match state {
+        State::Follower => r.become_follower(1, 2),
+        State::Candidate => r.become_candidate(),
+        State::Leader => {
+            r.become_candidate();
+            r.become_leader();
+        }
+        _ => unreachable!(),
+    }
+
+    r.step(&Message::new_append_msg(0, 0, 2, 0, 0, 0, vec![]));
+
+    assert_eq!(r.term, 2);
+    assert_eq!(r.role, State::Follower);
+}
