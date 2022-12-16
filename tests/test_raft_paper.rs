@@ -4,6 +4,7 @@ use raft_kv::{map, Entry, Message};
 use raft_kv::{Config, HardState, MemStorage, Raft, RaftError, Storage, INVALID_ID};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::vec;
 
 pub fn error_handle<T, E>(res: Result<T, E>) -> T
 where
@@ -507,4 +508,24 @@ fn test_update_term_from_message(state: State) {
 
     assert_eq!(r.term, 2);
     assert_eq!(r.role, State::Follower);
+}
+
+// test_candidate_fallback tests that while waiting for votes,
+// if a candidate receives an AppendEntries RPC from another server claiming
+// to be leader whose term is at least as large as the candidate's current term,
+// it recognizes the leader as legitimate and returns to follower state.
+// Reference: section 5.2
+#[test]
+fn test_candidate_fallback() {
+    let tests = vec![(2, 1, 2), (2, 1, 3)];
+    for (from, to, term) in tests {
+        let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new()).unwrap();
+        r.step(&Message::new_hup_msg(1, 1));
+        assert_eq!(r.role, State::Candidate);
+
+        r.step(&Message::new_append_msg(from, to, term, 0, 0, 0, vec![]));
+
+        assert_eq!(r.role, State::Follower);
+        assert_eq!(r.term, term);
+    }
 }
