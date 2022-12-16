@@ -228,7 +228,6 @@ impl<T: Storage> RaftLog<T> {
         match self.term(self.committed) {
             Ok(t) => (self.committed, t),
             Err(_e) => {
-                println!("{}", self.committed);
                 unreachable!()
             }
         }
@@ -400,7 +399,6 @@ mod tests {
     fn test_commit_to() {
         let storage = MemStorage::new();
         let mut raft_log = RaftLog::new(storage);
-        println!("123");
         assert_eq!((0, 0), raft_log.commit_info());
         let _res = raft_log.append(&[
             new_entry(1, 1),
