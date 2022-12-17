@@ -529,3 +529,52 @@ fn test_candidate_fallback() {
         assert_eq!(r.term, term);
     }
 }
+
+// test_handle_msg_append ensures:
+// 1. Reply false if log doesn’t contain an entry at `prev_log_index` whose term matches `prev_log_term`.
+// 2. If an existing entry conflicts with a new one (same index but different terms),
+//    delete the existing entry and all that follow it; append any new entries not already in the
+//    log.
+#[test]
+fn test_handle_msg_append() {
+    let nm = |term, log_term, index, commit, ents: Vec<(u64, u64)>| {
+        let entries = ents.iter().map(|&(i, t)| empty_entry(t, i)).collect();
+        let m = Message::new_append_msg(1, 1, term, commit, index, log_term, entries);
+        m
+    };
+    let tests = vec![
+        // Log consistency check failed cases
+        (nm(2, 3, 2, 2, vec![]), 2, 2, 0, true, 2), // previous log mismatch
+        (nm(2, 3, 3, 3, vec![]), 2, 2, 0, true, 2), // previous log non-exist
+        // AppendEntries Message term is stale
+        (nm(1, 1, 1, 3, vec![]), 2, 2, 0, true, 2),
+        (nm(1, 1, 1, 3, vec![(2, 2)]), 2, 2, 0, true, 2),
+        // Ensure 2
+        (nm(2, 1, 1, 1, vec![]), 2, 2, 1, false, 2),
+        (nm(2, 0, 0, 0, vec![(1, 2)]), 2, 1, 0, false, 2),
+        (nm(2, 2, 2, 3, vec![(3, 2), (4, 2)]), 2, 4, 3, false, 2),
+        (nm(2, 2, 2, 3, vec![]), 2, 2, 2, false, 2),
+        (nm(2, 2, 2, 4, vec![(3, 2), (4, 2)]), 2, 4, 4, false, 2),
+        (nm(2, 2, 2, 4, vec![]), 2, 2, 2, false, 2),
+        (nm(2, 1, 1, 4, vec![(2, 2)]), 2, 2, 2, false, 2),
+        (nm(3, 2, 2, 2, vec![(2, 3)]), 3, 2, 2, false, 3),
+    ];
+
+    for (m, current_term, w_index, w_commit, w_reject, log_term) in tests {
+        let mut r = new_test_raft(1, vec![1], 10, 1, MemStorage::new()).unwrap();
+        r.raft_log
+            .append(&[empty_entry(1, 1), empty_entry(2, 2)])
+            .unwrap();
+
+        r.become_follower(2, INVALID_ID);
+        r.step(&m);
+        let msgs = r.read_messages();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(
+            msgs[0],
+            Message::new_append_resp_msg(1, 1, current_term, w_reject, w_index, log_term)
+        );
+        assert_eq!(r.raft_log.buffer_last_index(), w_index);
+        assert_eq!(r.raft_log.committed, w_commit);
+    }
+}

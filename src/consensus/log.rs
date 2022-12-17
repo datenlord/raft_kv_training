@@ -202,24 +202,10 @@ impl<T: Storage> RaftLog<T> {
     }
 
     /// Sets the last committed value to the passed in value.
-    ///
-    /// # Errors
-    ///
-    /// return `IndexOutOfBounds` if `to_commit` is larger than the last index of the unstable log
     #[allow(clippy::integer_arithmetic)]
     #[inline]
-    pub fn commit_to(&mut self, to_commit: u64) -> Result<(), RaftError> {
-        let last_index = self.buffer_last_index();
-        if to_commit > last_index {
-            return Err(RaftError::Log(LogError::Unavailable(
-                last_index + 1,
-                to_commit,
-            )));
-        }
-        if to_commit > self.committed {
-            self.committed = to_commit;
-        }
-        Ok(())
+    pub fn commit_to(&mut self, to_commit: u64) {
+        self.committed = std::cmp::min(to_commit, self.buffer_last_index());
     }
 
     /// Returns the committed index and its term.
@@ -337,7 +323,7 @@ mod tests {
             let store = MemStorage::new();
             let mut raft_log = RaftLog::new(store);
             raft_log.log_buffer = ents.clone();
-            raft_log.commit_to(2).unwrap();
+            raft_log.commit_to(2);
 
             let res = raft_log.append(&entries);
             result_eq!(res, wres);
@@ -406,7 +392,7 @@ mod tests {
             new_entry(3, 3),
             new_entry(4, 4),
         ]);
-        raft_log.commit_to(2).unwrap();
+        raft_log.commit_to(2);
         let (idx, term) = raft_log.commit_info();
         assert_eq!((idx, term), (2, 2));
     }

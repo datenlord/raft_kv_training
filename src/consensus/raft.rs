@@ -393,8 +393,18 @@ impl<T: Storage> Raft<T> {
     /// do append and then commit as a follower
     fn do_append_as_a_follower(&mut self, msg: &MsgAppend) -> bool {
         self.become_follower(msg.term, msg.from);
-        self.raft_log.append(&msg.entries[..]).is_err()
-            || self.raft_log.commit_to(msg.leader_commit).is_err()
+
+        if self.raft_log.append(&msg.entries[..]).is_ok() {
+            self.raft_log.commit_to(msg.leader_commit);
+            false
+        } else {
+            true
+        }
+    }
+
+    /// log consistency check
+    fn log_consistency_check(&self, prev_log_index: u64, prev_log_term: u64) -> bool {
+        !self.raft_log.match_term(prev_log_index, prev_log_term)
     }
 
     /// append entries message's handler
@@ -405,9 +415,13 @@ impl<T: Storage> Raft<T> {
                 if self.role == State::Leader {
                     unreachable!("Never allow two leader in the same term in a raft cluster!!")
                 }
-                self.do_append_as_a_follower(msg)
+                self.log_consistency_check(msg.prev_log_index, msg.prev_log_term)
+                    || self.do_append_as_a_follower(msg)
             }
-            Ordering::Less => self.do_append_as_a_follower(msg),
+            Ordering::Less => {
+                self.log_consistency_check(msg.prev_log_index, msg.prev_log_term)
+                    || self.do_append_as_a_follower(msg)
+            }
         };
 
         let append_reply = Message::new_append_resp_msg(
