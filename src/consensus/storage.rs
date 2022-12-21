@@ -11,7 +11,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 pub struct RaftState {
     /// Contains the last meta information including commit index, the vote leader, and the vote term.
     #[getset(get = "pub", set, get_mut)]
-    pub hard_state: HardState,
+    hard_state: HardState,
     /// Records the current node IDs like `[1, 2, 3]` in the cluster.
     #[getset(set)]
     pub conf_state: ConfState,
