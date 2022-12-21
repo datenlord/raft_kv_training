@@ -316,7 +316,14 @@ fn test_follower_vote() {
         );
         r.step(&msg);
         let msgs = r.read_messages();
-        let reply = Message::new_request_vote_resp_msg(1, nvote, 1, wreject);
+        let reply = Message::new_request_vote_resp_msg(
+            1,
+            nvote,
+            1,
+            wreject,
+            r.raft_log.buffer_last_index(),
+            r.raft_log.last_term(),
+        );
         let expect_msgs = vec![reply];
         assert_eq!(msgs, expect_msgs);
     }
@@ -328,21 +335,28 @@ fn test_follower_vote() {
 #[test]
 fn test_voter() {
     let tests = vec![
-        // same logterm
-        (vec![empty_entry(1, 1)], 1, 1, false),
-        (vec![empty_entry(1, 1)], 1, 2, false),
-        (vec![empty_entry(1, 1), empty_entry(1, 2)], 1, 1, true),
+        // same log term
+        (vec![empty_entry(1, 1)], 1, 1, false, 1, 1),
+        (vec![empty_entry(1, 1)], 1, 2, false, 1, 1),
+        (vec![empty_entry(1, 1), empty_entry(1, 2)], 1, 1, true, 2, 1),
         // candidate higher logterm
-        (vec![empty_entry(1, 1)], 2, 1, false),
-        (vec![empty_entry(1, 1)], 2, 2, false),
-        (vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 1, false),
+        (vec![empty_entry(1, 1)], 2, 1, false, 1, 1),
+        (vec![empty_entry(1, 1)], 2, 2, false, 1, 1),
+        (
+            vec![empty_entry(1, 1), empty_entry(1, 2)],
+            2,
+            1,
+            false,
+            2,
+            1,
+        ),
         // voter higher logterm
-        (vec![empty_entry(2, 1)], 1, 1, true),
-        (vec![empty_entry(2, 1)], 1, 2, true),
-        (vec![empty_entry(2, 1), empty_entry(2, 2)], 1, 1, true),
+        (vec![empty_entry(2, 1)], 1, 1, true, 1, 2),
+        (vec![empty_entry(2, 1)], 1, 2, true, 1, 2),
+        (vec![empty_entry(2, 1), empty_entry(2, 2)], 1, 1, true, 2, 2),
     ];
 
-    for (ents, log_term, index, wreject) in tests {
+    for (ents, log_term, index, wreject, last_log_idx, last_log_term) in tests {
         let s = MemStorage::new();
         s.wl().append(&ents).unwrap();
         let mut r = new_test_raft(1, vec![1, 2], 10, 1, s).unwrap();
@@ -353,7 +367,7 @@ fn test_voter() {
         assert!(msgs.len() == 1);
         assert_eq!(
             msgs[0],
-            Message::new_request_vote_resp_msg(1, 2, 3, wreject)
+            Message::new_request_vote_resp_msg(1, 2, 3, wreject, last_log_idx, last_log_term)
         );
     }
 }
@@ -386,7 +400,14 @@ fn test_vote_from_any_state() {
         assert_eq!(msgs.len(), 1);
         assert_eq!(
             msgs[0],
-            Message::new_request_vote_resp_msg(1, 2, new_term, false)
+            Message::new_request_vote_resp_msg(
+                1,
+                2,
+                new_term,
+                false,
+                r.raft_log.buffer_last_index(),
+                r.raft_log.last_term()
+            )
         );
 
         assert_eq!(r.role, State::Follower);
@@ -439,7 +460,14 @@ fn test_leader_election_in_one_round_rpc() {
 
         r.step(&Message::new_hup_msg(1, 1));
         for (id, vote) in votes {
-            let m = Message::new_request_vote_resp_msg(id, 1, r.term, !vote);
+            let m = Message::new_request_vote_resp_msg(
+                id,
+                1,
+                r.term,
+                !vote,
+                r.raft_log.buffer_last_index(),
+                r.raft_log.last_term(),
+            );
             r.step(&m);
         }
         assert_eq!(r.role, state);

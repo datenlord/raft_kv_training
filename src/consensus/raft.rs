@@ -141,7 +141,10 @@ impl<T: Storage> Raft<T> {
             progresses: HashMap::with_capacity(peers.len()),
         };
         for id in peers {
-            let _ = raft.progresses.insert(*id, Progress::default());
+            let _ = raft.progresses.insert(
+                *id,
+                Progress::new(raft.raft_log.buffer_last_index(), raft.raft_log.last_term()),
+            );
         }
         Ok(raft)
     }
@@ -173,15 +176,6 @@ impl<T: Storage> Raft<T> {
         self.reset(term);
         self.leader_id = self.id;
         self.role = State::Leader;
-        let last_index = self.raft_log.buffer_last_index();
-        for (&id, peer) in &mut self.progresses {
-            if id == self.id {
-                peer.matched = last_index + 1;
-                peer.next_idx = last_index + 2;
-            } else {
-                peer.next_idx = last_index + 1;
-            }
-        }
         let _res = self.raft_log.append(&[Entry::default()]);
     }
 
@@ -198,18 +192,6 @@ impl<T: Storage> Raft<T> {
         self.random_election_timeout =
             rand::thread_rng().gen_range(self.election_timeout..2 * self.election_timeout);
         self.votes.clear();
-        let last_index = self.raft_log.buffer_last_index();
-        let committed = self.raft_log.committed;
-        let persisted = self.raft_log.persisted;
-        let self_id = self.id;
-        for (&id, mut pr) in self.progresses_mut() {
-            pr.matched = 0;
-            pr.next_idx = last_index + 1;
-            if id == self_id {
-                pr.matched = persisted;
-                pr.committed_index = committed;
-            }
-        }
     }
 
     /// Run by each peer in a raft cluster to advance the logical clock
@@ -374,8 +356,14 @@ impl<T: Storage> Raft<T> {
             }
         };
 
-        let request_vote_reply =
-            Message::new_request_vote_resp_msg(self.id, msg.from, self.term, reject);
+        let request_vote_reply = Message::new_request_vote_resp_msg(
+            self.id,
+            msg.from,
+            self.term,
+            reject,
+            self.raft_log.buffer_last_index(),
+            self.raft_log.last_term(),
+        );
         self.send(request_vote_reply);
     }
 
@@ -384,6 +372,10 @@ impl<T: Storage> Raft<T> {
         if msg.term > self.term {
             self.become_follower(msg.term, INVALID_ID);
         } else if self.role == State::Candidate {
+            if let Some(progress) = self.progresses.get_mut(&msg.from) {
+                progress.log_index = msg.last_log_index;
+                progress.log_term = msg.last_log_term;
+            }
             self.poll(msg.from, !msg.reject);
         } else {
             // make clippy happy

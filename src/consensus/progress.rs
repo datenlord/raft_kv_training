@@ -3,22 +3,20 @@
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Progress {
-    /// How much state is matched
-    pub matched: u64,
-    /// The next index to apply
-    pub next_idx: u64,
-    /// Committed index in raft_log
-    pub committed_index: u64,
+    /// The last log index
+    pub log_index: u64,
+    /// The last log term
+    pub log_term: u64,
 }
 
 impl Progress {
     /// Creates a new progress
     #[must_use]
     #[inline]
-    pub fn new(next_idx: u64) -> Self {
+    pub fn new(log_index: u64, log_term: u64) -> Self {
         Self {
-            next_idx,
-            ..Default::default()
+            log_index,
+            log_term,
         }
     }
 }

@@ -167,13 +167,22 @@ impl Message {
     /// Generate a new request vote response message
     #[must_use]
     #[inline]
-    pub fn new_request_vote_resp_msg(from: u64, to: u64, term: u64, reject: bool) -> Self {
+    pub fn new_request_vote_resp_msg(
+        from: u64,
+        to: u64,
+        term: u64,
+        reject: bool,
+        last_log_index: u64,
+        last_log_term: u64,
+    ) -> Self {
         Self {
             msg_data: Some(MsgData::RequestVoteResponse(MsgRequestVoteResponse {
                 from,
                 to,
                 term,
                 reject,
+                last_log_index,
+                last_log_term,
             })),
         }
     }
