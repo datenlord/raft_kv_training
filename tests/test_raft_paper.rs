@@ -5,18 +5,6 @@ use raft_kv::{Config, HardState, MemStorage, Raft, RaftError, Storage, INVALID_I
 use std::collections::HashMap;
 use std::fmt::Debug;
 
-pub fn error_handle<T, E>(res: Result<T, E>) -> T
-where
-    E: Debug,
-{
-    match res {
-        Ok(t) => t,
-        Err(e) => {
-            unreachable!("{:?}", e)
-        }
-    }
-}
-
 fn new_test_raft(
     id: u64,
     peers: Vec<u64>,
@@ -42,7 +30,7 @@ fn empty_entry(term: u64, index: u64) -> Entry {
 fn start_as_follower_2aa() {
     let config = Config::new(1, 10, 1);
     let store = MemStorage::new();
-    let r = error_handle(Raft::new(&config, store));
+    let r = Raft::new(&config, store).unwrap();
     assert_eq!(r.role, State::Follower);
 }
 
