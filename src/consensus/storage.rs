@@ -266,7 +266,7 @@ impl Storage for MemStorage {
 
         let first_idx = self.first_index();
         let last_idx = self.last_index();
-        if first_idx == INVALID_INDEX + 1 || last_idx == INVALID_INDEX {
+        if first_idx == INVALID_INDEX + 1 && last_idx == INVALID_INDEX {
             Err(RaftError::Log(LogError::Unavailable(low, high)))
         } else {
             let core = self.wl();

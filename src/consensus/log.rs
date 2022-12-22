@@ -261,6 +261,52 @@ impl<T: Storage> RaftLog<T> {
             Err(_) => unreachable!(),
         }
     }
+
+    /// Get the slice[low, high] from the raft log
+    ///
+    /// # Errors
+    ///
+    /// Return `Unavailable` Error if the `low` is less than the first index of the `store`
+    /// or the `high` is larger than the last index of the `log_buffer`
+    #[allow(clippy::integer_arithmetic, clippy::indexing_slicing)]
+    #[inline]
+    pub fn entries(&self, low: u64, high: u64) -> Result<Vec<Entry>, RaftError> {
+        let stroage_first_idx = self.store.first_index();
+        let storage_last_idx = self.store.last_index();
+        let buf_first_idx = self.buffer_first_index();
+        let buf_last_idx = self.buffer_last_index();
+
+        if low < stroage_first_idx {
+            // when the storage is empty, the first index and the last index
+            // are 1 and 0, so storage_first_idx - 1 >= 0 is always valid.
+            // It's Ok to turn off clippy::integer_arithmetic here.
+            return Err(RaftError::Log(LogError::Unavailable(
+                low,
+                std::cmp::min(stroage_first_idx - 1, high),
+            )));
+        }
+
+        if high > buf_last_idx {
+            return Err(RaftError::Log(LogError::Unavailable(
+                std::cmp::max(low, buf_last_idx + 1),
+                high,
+            )));
+        }
+
+        // Because all the index follow are valid, so it's ok to turn off clippy::indexing_slicing here.
+        if buf_first_idx <= low && high <= buf_last_idx {
+            let low_offset: usize = down_cast(low - buf_first_idx)?;
+            let high_offset: usize = down_cast(high - buf_first_idx)?;
+            Ok(self.log_buffer[low_offset..=high_offset].to_vec())
+        } else if stroage_first_idx <= low && high <= storage_last_idx {
+            self.store.entries(low, high)
+        } else {
+            let high_offset: usize = down_cast(high - buf_first_idx)?;
+            let mut ents = self.store.entries(low, storage_last_idx)?;
+            ents.extend_from_slice(&self.log_buffer[0..=high_offset]);
+            Ok(ents)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -418,6 +464,47 @@ mod tests {
             raft_log.persist_log_buffer();
             assert!(raft_log.log_buffer.is_empty());
             assert_eq!(raft_log.persisted, persisted);
+        }
+    }
+
+    #[test]
+    fn test_log_entries() {
+        let storage = MemStorage::new();
+        storage
+            .wl()
+            .append(&[
+                new_entry(1, 1),
+                new_entry(2, 1),
+                new_entry(3, 1),
+                new_entry(4, 1),
+                new_entry(5, 2),
+                new_entry(6, 3),
+            ])
+            .unwrap();
+        let mut raft_log = RaftLog::new(storage);
+        raft_log
+            .append(&[new_entry(7, 3), new_entry(8, 4), new_entry(9, 5)])
+            .unwrap();
+        let tests = vec![
+            (5, 6, Ok(vec![new_entry(5, 2), new_entry(6, 3)])),
+            (
+                5,
+                8,
+                Ok(vec![
+                    new_entry(5, 2),
+                    new_entry(6, 3),
+                    new_entry(7, 3),
+                    new_entry(8, 4),
+                ]),
+            ),
+            (8, 9, Ok(vec![new_entry(8, 4), new_entry(9, 5)])),
+            (8, 10, Err(RaftError::Log(LogError::Unavailable(10, 10)))),
+            (10, 20, Err(RaftError::Log(LogError::Unavailable(10, 20)))),
+        ];
+
+        for (low, high, wres) in tests {
+            let res = raft_log.entries(low, high);
+            result_eq!(res, wres);
         }
     }
 }
