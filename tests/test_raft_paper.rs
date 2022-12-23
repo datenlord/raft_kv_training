@@ -6,18 +6,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::vec;
 
-pub fn error_handle<T, E>(res: Result<T, E>) -> T
-where
-    E: Debug,
-{
-    match res {
-        Ok(t) => t,
-        Err(e) => {
-            unreachable!("{:?}", e)
-        }
-    }
-}
-
 fn new_test_raft(
     id: u64,
     peers: Vec<u64>,
@@ -43,7 +31,7 @@ fn empty_entry(term: u64, index: u64) -> Entry {
 fn start_as_follower_2aa() {
     let config = Config::new(1, 10, 1);
     let store = MemStorage::new();
-    let r = error_handle(Raft::new(&config, store));
+    let r = Raft::new(&config, store).unwrap();
     assert_eq!(r.role, State::Follower);
 }
 
@@ -84,7 +72,7 @@ fn test_nonleader_start_election(role: State) {
 
     assert_eq!(r.term, 2);
     assert_eq!(r.role, State::Candidate);
-    assert!(r.votes()[&r.id]);
+    assert!(r.votes()[&r.id()]);
     let mut msgs: Vec<Message> = r.msgs.drain(..).collect();
     let last_log_index = r.raft_log.buffer_last_index();
     let last_log_term = r.raft_log.last_term();

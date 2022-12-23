@@ -81,7 +81,11 @@ impl<T: Storage> RaftLog<T> {
 
                 match self.store.term(last_index) {
                     Ok(v) => v,
-                    Err(_e) => unreachable!(),
+                    Err(_e) => {
+                        // `last_index` is always valid, so the `term(last_index)` will necer return any error.
+                        // If it does, there must be something going wrong. It's ok to crash here.
+                        unreachable!();
+                    }
                 }
             }
         }
@@ -153,51 +157,50 @@ impl<T: Storage> RaftLog<T> {
     ///
     /// if the first index of `ents` is less than `self.committed` then return `TruncateCommittedLog`
     /// if the first index of `ents` is greater than `self.buffer_last_index`() + 1 then return `Unavailable`
-    #[allow(clippy::integer_arithmetic, clippy::indexing_slicing)]
+    #[allow(clippy::integer_arithmetic)]
     #[inline]
     pub fn append(&mut self, ents: &[Entry]) -> Result<(), RaftError> {
-        if ents.is_empty() {
-            return Ok(());
-        }
-
-        let buffer_last_idx = self.buffer_last_index();
-        let ents_first_idx = ents[0].index;
-        let ents_last_idx = ents[ents.len() - 1].index;
-
-        if ents_first_idx <= self.committed {
-            // case 1 and case 2
-            return Err(RaftError::Log(LogError::TruncateCommittedLog(
-                ents_first_idx,
-                self.committed,
-            )));
-        }
-
-        if ents_first_idx > buffer_last_idx + 1 {
-            // case 7
-            return Err(RaftError::Log(LogError::Unavailable(
-                buffer_last_idx + 1,
-                ents_first_idx,
-            )));
-        }
-
-        if ents_first_idx <= self.persisted {
-            if ents_last_idx <= self.persisted {
-                // case 3
-                self.store.append(ents)?;
-            } else {
-                // case 4, we need to split ents into two tow parts.
-                let offset: usize = down_cast(self.persisted - ents_first_idx)?;
-                self.store.append(&ents[0..=offset])?;
-                self.log_buffer.clear();
-                self.log_buffer.extend_from_slice(&ents[offset + 1..]);
+        if let (Some(first_ent), Some(last_ent)) = (ents.first(), ents.last()) {
+            let buffer_last_idx = self.buffer_last_index();
+            let ents_first_idx = first_ent.index;
+            let ents_last_idx = last_ent.index;
+            if ents_first_idx <= self.committed {
+                // case 1 and case 2
+                return Err(RaftError::Log(LogError::TruncateCommittedLog(
+                    ents_first_idx,
+                    self.committed,
+                )));
             }
-        } else {
-            // case 5 and case 6
-            let length: usize = down_cast(ents_first_idx - self.persisted)?;
-            self.log_buffer.truncate(length);
-            self.log_buffer.extend_from_slice(ents);
-        }
+            // The index of log is continuous, and it's a 64-bit unsigned integer.
+            // Index is enough large, and it increase very slow, so there's no need to worry about the overflow issuse.
+            // It's Ok to turn off the `clippy::integer_arithmetic` clippy here.
+            if ents_first_idx > buffer_last_idx + 1 {
+                // case 7
+                return Err(RaftError::Log(LogError::Unavailable(
+                    buffer_last_idx + 1,
+                    ents_first_idx,
+                )));
+            }
 
+            if ents_first_idx <= self.persisted {
+                if ents_last_idx <= self.persisted {
+                    // case 3
+                    self.store.append(ents)?;
+                } else {
+                    // case 4, we need to split ents in two tow parts.
+                    let offset: usize = down_cast(self.persisted - ents_first_idx)?;
+                    let (stroe_ents, buffer_ents) = ents.split_at(offset + 1);
+                    self.store.append(stroe_ents)?;
+                    self.log_buffer.clear();
+                    self.log_buffer.extend_from_slice(buffer_ents);
+                }
+            } else {
+                // case 5 and case 6
+                let length: usize = down_cast(ents_first_idx - self.persisted)?;
+                self.log_buffer.truncate(length);
+                self.log_buffer.extend_from_slice(ents);
+            }
+        }
         Ok(())
     }
 
@@ -214,6 +217,8 @@ impl<T: Storage> RaftLog<T> {
         match self.term(self.committed) {
             Ok(t) => (self.committed, t),
             Err(_e) => {
+                // `self.committed` is always valid, so the `term(self.committed)` will necer return any error.
+                // If it does, there must be something going wrong. It's ok to crash here.
                 unreachable!()
             }
         }

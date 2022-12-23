@@ -65,7 +65,8 @@ impl Default for State {
 #[derive(Debug, Getters, MutGetters, Setters)]
 pub struct Raft<T: Storage> {
     /// raft id
-    pub id: u64,
+    #[get = "pub"]
+    id: u64,
     /// current term
     pub term: u64,
     /// which candidate is this peer to voted for
