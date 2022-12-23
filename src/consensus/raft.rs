@@ -3,7 +3,7 @@ use crate::log::RaftLog;
 use crate::message::MsgData;
 use crate::{config::Config, INVALID_ID};
 use crate::{
-    Entry, HardState, LogError, Message, MsgAppend, MsgHeartbeat, MsgHeartbeatResponse,
+    Entry, HardState, LogError, Message, MsgAppend, MsgHeartbeat, MsgHeartbeatResponse, MsgPropose,
     MsgRequestVote, MsgRequestVoteResponse, Progress, RaftError, Storage,
 };
 use getset::{Getters, MutGetters, Setters};
@@ -99,7 +99,7 @@ pub struct Raft<T: Storage> {
     /// The list of messages
     pub msgs: Vec<Message>,
 
-    ///
+    /// The log progress of all nodes in the cluster
     #[getset(get_mut)]
     progresses: HashMap<u64, Progress>,
 }
@@ -267,6 +267,7 @@ impl<T: Storage> Raft<T> {
             Some(MsgData::RequestVote(ref m)) => self.handle_request_vote_msg(m),
             Some(MsgData::RequestVoteResponse(ref m)) => self.handle_request_vote_reply(m),
             Some(MsgData::Append(ref m)) => self.handle_append_entries_msg(m),
+            Some(MsgData::Propose(ref m)) => self.handle_propose_msg(m),
             _ => unreachable!(),
         }
     }
@@ -280,6 +281,7 @@ impl<T: Storage> Raft<T> {
             Some(MsgData::RequestVote(m)) => self.handle_request_vote_msg(&m),
             Some(MsgData::RequestVoteResponse(m)) => self.handle_request_vote_reply(&m),
             Some(MsgData::Append(ref m)) => self.handle_append_entries_msg(m),
+            Some(MsgData::Propose(ref _m)) => (),
             _ => unreachable!(),
         }
     }
@@ -379,6 +381,70 @@ impl<T: Storage> Raft<T> {
             self.poll(msg.from, !msg.reject);
         } else {
             // make clippy happy
+        }
+    }
+
+    /// propose message's handler
+    #[allow(clippy::integer_arithmetic, clippy::expect_used)]
+    fn handle_propose_msg(&mut self, msg: &MsgPropose) {
+        if self.role == State::Follower && self.leader_id != INVALID_ID {
+            let new_propose_msg =
+                Message::new_propose_msg(msg.from, self.leader_id, msg.entries.clone());
+            self.send(new_propose_msg);
+        } else {
+            let (commit_index, _) = self.raft_log.commit_info();
+            let mut ents = msg.entries.clone();
+            if self.append_entry(&mut ents[..]) {
+                self.raft_log.persist_log_buffer();
+                for (id, progress) in self.progresses.clone() {
+                    if id == self.id {
+                        continue;
+                    }
+                    let anchor_idx = progress.log_index;
+                    let anchor_term = progress.log_term;
+                    if let Ok(log_term) = self.raft_log.term(anchor_idx) {
+                        let append_msg = match anchor_term.cmp(&log_term) {
+                            Ordering::Equal => {
+                                // Because of the log integrity check, so the `anchor_idx` + 1 is always less or equal than `self.raft_log.buffer_last_index()`,
+                                // the `entries` won't return any error here.
+                                let entries = self
+                                    .raft_log
+                                    .entries(anchor_idx + 1, self.raft_log.buffer_last_index())
+                                    .expect("Undefinded behaviour");
+                                Message::new_append_msg(
+                                    self.id,
+                                    id,
+                                    self.term,
+                                    commit_index,
+                                    anchor_idx,
+                                    anchor_term,
+                                    entries,
+                                )
+                            }
+                            Ordering::Less | Ordering::Greater => {
+                                let (index, term) = self
+                                    .raft_log
+                                    .get_next_unconfilict_index(anchor_idx, anchor_term);
+
+                                let entries = self
+                                    .raft_log
+                                    .entries(index + 1, self.raft_log.buffer_last_index())
+                                    .expect("Undefined behaviour");
+                                Message::new_append_msg(
+                                    self.id,
+                                    id,
+                                    self.term,
+                                    commit_index,
+                                    index,
+                                    term,
+                                    entries,
+                                )
+                            }
+                        };
+                        self.send(append_msg);
+                    }
+                }
+            }
         }
     }
 
