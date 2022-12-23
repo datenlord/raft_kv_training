@@ -77,8 +77,14 @@ pub trait Storage {
     /// will be returned in this case.
     fn first_index(&self) -> u64;
 
+    /// The term of the first entry replicated in the `Storage`.
+    fn first_term(&self) -> u64;
+
     /// The index of the last entry replicated in the `Storage`.
     fn last_index(&self) -> u64;
+
+    /// The term of the last entry replicated in the `Storage`.
+    fn last_term(&self) -> u64;
 
     /// Store a entry slice into the `Storage`
     /// # Errors
@@ -299,10 +305,26 @@ impl Storage for MemStorage {
     }
 
     #[inline]
+    fn first_term(&self) -> u64 {
+        match self.term(self.first_index()) {
+            Ok(term) => term,
+            Err(_) => unreachable!(),
+        }
+    }
+
+    #[inline]
     fn last_index(&self) -> u64 {
         self.rl()
             .last_index()
             .map_or_else(|| INVALID_INDEX, |last| last)
+    }
+
+    #[inline]
+    fn last_term(&self) -> u64 {
+        match self.term(self.last_index()) {
+            Ok(term) => term,
+            Err(_) => unreachable!(),
+        }
     }
 
     #[allow(clippy::indexing_slicing, clippy::integer_arithmetic)]
