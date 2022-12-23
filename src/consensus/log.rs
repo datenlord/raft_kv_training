@@ -271,7 +271,6 @@ impl<T: Storage> RaftLog<T> {
                 }
             }
         }
-
         if high == 0 {
             None
         } else if let Ok(ents) = self.store.entries(low - 1, high - 1) {
@@ -321,22 +320,27 @@ impl<T: Storage> RaftLog<T> {
 
     /// find the last entry whose term is not greater than the given term in all entries before the given index in the raft log
     #[inline]
-    pub fn get_next_unconfilict_index(&self, index: u64, term: u64) -> Option<(u64, u64)> {
+    pub fn get_next_unconfilict_index(&self, index: u64, term: u64) -> (u64, u64) {
         if let Some((index, term)) = self.search_in_buffer(index, term) {
-            Some((index, term))
+            (index, term)
         } else {
             let storage_last_idx = self.store.last_index();
             let storage_last_term = self.store.last_term();
+            // check the last entry in the storage before
             if index > self.store.last_index() && term >= storage_last_term {
                 if let Ok(ents) = self.store.entries(storage_last_idx, storage_last_idx) {
-                    ents.first().map(|ent| (ent.index, ent.term))
+                    ents.first().map_or_else(
+                        || (INVALID_INDEX, INVALID_TERM),
+                        |ent| (ent.index, ent.term),
+                    )
                 } else {
                     // The `storage_last_term` is always valid so `entries` should never return any error.
                     // If it does, there must be something undefined happen, it's ok to crash here.
                     unreachable!()
                 }
             } else {
-                self.search_in_storage(storage_last_idx, term)
+                self.search_in_storage(std::cmp::min(index, storage_last_idx), term)
+                    .map_or_else(|| (INVALID_INDEX, INVALID_TERM), |(i, t)| (i, t))
             }
         }
     }
@@ -673,7 +677,7 @@ mod tests {
         storage
             .wl()
             .append(&[
-                new_entry(1, 1),
+                new_entry(1, 2),
                 new_entry(2, 2),
                 new_entry(3, 2),
                 new_entry(4, 4),
@@ -691,7 +695,12 @@ mod tests {
                 new_entry(11, 7),
             ])
             .unwrap();
-        let tests = vec![(9, 6, Some((8, 5))), (8, 3, Some((3, 2)))];
+        let tests = vec![
+            (9, 6, (8, 5)),
+            (8, 3, (3, 2)),
+            (3, 3, (2, 2)),
+            (3, 1, (INVALID_INDEX, INVALID_TERM)),
+        ];
         for (index, term, wres) in tests {
             let res = raft_log.get_next_unconfilict_index(index, term);
             assert_eq!(res, wres);
