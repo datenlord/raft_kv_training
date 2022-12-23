@@ -606,3 +606,110 @@ fn test_handle_msg_append() {
         assert_eq!(r.raft_log.committed, w_commit);
     }
 }
+
+#[test]
+fn test_propose_message_to_leader() {
+    let storage = MemStorage::new();
+    storage
+        .wl()
+        .append(&[
+            empty_entry(1, 1),
+            empty_entry(2, 2),
+            empty_entry(2, 3),
+            empty_entry(3, 4),
+            empty_entry(3, 5),
+            empty_entry(3, 6),
+            empty_entry(3, 7),
+            empty_entry(3, 8),
+        ])
+        .unwrap();
+    let mut r = new_test_raft(1, vec![1, 2, 3, 4], 10, 1, storage).unwrap();
+    r.raft_log.append(&[empty_entry(7, 9)]).unwrap();
+    let pr = r.progresses_mut();
+    // idx: 1  2  3  4  5  6  7  8  9  10
+    // L  : 1  2  2  3  3  3  3  3  7  8
+    // F1 : 1  3  3  4  4  4  5  5  6
+    // F2 : 1  2  3  5  5
+    // F3 : 1  2  2  3
+    let follower_log = vec![(9, 6), (5, 5), (4, 3)];
+    for (i, (index, term)) in follower_log.iter().enumerate() {
+        let id: u64 = (i + 2) as u64;
+        if let Some(x) = pr.get_mut(&id) {
+            x.log_index = *index;
+            x.log_term = *term;
+        }
+    }
+    r.become_candidate();
+    r.become_leader();
+    r.term = 8;
+    let propose_msg = Message::new_propose_msg(5, 1, vec![empty_entry(0, 0)]);
+    r.step(&propose_msg);
+    let mut msgs = r.read_messages();
+    msgs.sort_by_key(|m| format!("{:?}", m));
+    let tests = vec![
+        Message::new_append_msg(
+            1,
+            2,
+            8,
+            0,
+            8,
+            3,
+            vec![empty_entry(7, 9), empty_entry(8, 10)],
+        ),
+        Message::new_append_msg(
+            1,
+            3,
+            8,
+            0,
+            4,
+            3,
+            vec![
+                empty_entry(3, 5),
+                empty_entry(3, 6),
+                empty_entry(3, 7),
+                empty_entry(3, 8),
+                empty_entry(7, 9),
+                empty_entry(8, 10),
+            ],
+        ),
+        Message::new_append_msg(
+            1,
+            4,
+            8,
+            0,
+            4,
+            3,
+            vec![
+                empty_entry(3, 5),
+                empty_entry(3, 6),
+                empty_entry(3, 7),
+                empty_entry(3, 8),
+                empty_entry(7, 9),
+                empty_entry(8, 10),
+            ],
+        ),
+    ];
+    for (msg, wmsg) in tests.iter().zip(msgs.iter()) {
+        assert_eq!(msg, wmsg);
+    }
+}
+
+#[test]
+fn test_propose_message_to_follower() {
+    let storage = MemStorage::new();
+    let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, storage).unwrap();
+    let propose_msg = Message::new_propose_msg(10, 1, vec![empty_entry(0, 0)]);
+    r.step(&propose_msg);
+    assert!(r.read_messages().is_empty());
+    r.become_follower(1, 2);
+    r.step(&propose_msg);
+    let msgs = r.read_messages();
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(
+        msgs[0],
+        Message::new_propose_msg(10, 2, vec![empty_entry(0, 0)])
+    );
+    r.become_candidate();
+    r.step(&propose_msg);
+    assert!(r.read_messages().is_empty());
+}

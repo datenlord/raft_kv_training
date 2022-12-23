@@ -100,7 +100,7 @@ pub struct Raft<T: Storage> {
     pub msgs: Vec<Message>,
 
     /// The log progress of all nodes in the cluster
-    #[getset(get_mut)]
+    #[get_mut = "pub"]
     progresses: HashMap<u64, Progress>,
 }
 
@@ -254,6 +254,7 @@ impl<T: Storage> Raft<T> {
             Some(MsgData::RequestVote(m)) => self.handle_request_vote_msg(&m),
             Some(MsgData::RequestVoteResponse(m)) => self.handle_request_vote_reply(&m),
             Some(MsgData::Append(ref m)) => self.handle_append_entries_msg(m),
+            Some(MsgData::Propose(ref m)) => self.handle_propose_msg(m),
             _ => unreachable!(),
         }
     }
@@ -387,10 +388,12 @@ impl<T: Storage> Raft<T> {
     /// propose message's handler
     #[allow(clippy::integer_arithmetic, clippy::expect_used)]
     fn handle_propose_msg(&mut self, msg: &MsgPropose) {
-        if self.role == State::Follower && self.leader_id != INVALID_ID {
-            let new_propose_msg =
-                Message::new_propose_msg(msg.from, self.leader_id, msg.entries.clone());
-            self.send(new_propose_msg);
+        if self.role == State::Follower {
+            if self.leader_id != INVALID_ID {
+                let new_propose_msg =
+                    Message::new_propose_msg(msg.from, self.leader_id, msg.entries.clone());
+                self.send(new_propose_msg);
+            }
         } else {
             let (commit_index, _) = self.raft_log.commit_info();
             let mut ents = msg.entries.clone();
