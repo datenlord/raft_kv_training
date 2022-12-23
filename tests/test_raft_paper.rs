@@ -572,11 +572,11 @@ fn test_handle_msg_append() {
     };
     let tests = vec![
         // Log consistency check failed cases
-        (nm(2, 3, 2, 2, vec![]), 2, 2, 0, true, 2), // previous log mismatch
-        (nm(2, 3, 3, 3, vec![]), 2, 2, 0, true, 2), // previous log non-exist
+        (nm(2, 3, 2, 2, vec![(3, 4)]), 2, 1, 0, true, 1), // previous log mismatch
+        (nm(2, 3, 3, 3, vec![(4, 3)]), 2, 2, 0, true, 2), // previous log non-exist
         // AppendEntries Message term is stale
-        (nm(1, 1, 1, 3, vec![]), 2, 2, 0, true, 2),
-        (nm(1, 1, 1, 3, vec![(2, 2)]), 2, 2, 0, true, 2),
+        (nm(1, 1, 1, 3, vec![(2, 3)]), 2, 1, 0, true, 1),
+        (nm(1, 1, 1, 3, vec![(2, 2)]), 2, 1, 0, true, 1),
         // Ensure 2
         (nm(2, 1, 1, 1, vec![]), 2, 2, 1, false, 2),
         (nm(2, 0, 0, 0, vec![(1, 2)]), 2, 1, 0, false, 2),
@@ -589,10 +589,12 @@ fn test_handle_msg_append() {
     ];
 
     for (m, current_term, w_index, w_commit, w_reject, log_term) in tests {
-        let mut r = new_test_raft(1, vec![1], 10, 1, MemStorage::new()).unwrap();
-        r.raft_log
+        let storage = MemStorage::new();
+        storage
+            .wl()
             .append(&[empty_entry(1, 1), empty_entry(2, 2)])
             .unwrap();
+        let mut r = new_test_raft(1, vec![1], 10, 1, storage).unwrap();
 
         r.become_follower(2, INVALID_ID);
         r.step(&m);
@@ -602,7 +604,6 @@ fn test_handle_msg_append() {
             msgs[0],
             Message::new_append_resp_msg(1, 1, current_term, w_reject, w_index, log_term)
         );
-        assert_eq!(r.raft_log.buffer_last_index(), w_index);
         assert_eq!(r.raft_log.committed, w_commit);
     }
 }
@@ -689,13 +690,14 @@ fn test_propose_message_to_leader() {
             ],
         ),
     ];
-    for (msg, wmsg) in tests.iter().zip(msgs.iter()) {
-        assert_eq!(msg, wmsg);
-    }
+    tests
+        .iter()
+        .zip(msgs.iter())
+        .for_each(|(msg, wmsg)| assert_eq!(msg, wmsg));
 }
 
 #[test]
-fn test_propose_message_to_follower() {
+fn test_propose_message_to_follower_and_candidate() {
     let storage = MemStorage::new();
     let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, storage).unwrap();
     let propose_msg = Message::new_propose_msg(10, 1, vec![empty_entry(0, 0)]);
@@ -712,4 +714,103 @@ fn test_propose_message_to_follower() {
     r.become_candidate();
     r.step(&propose_msg);
     assert!(r.read_messages().is_empty());
+}
+
+#[test]
+fn test_append_reply_message() {
+    let storage = MemStorage::new();
+    storage
+        .wl()
+        .append(&[
+            empty_entry(1, 1),
+            empty_entry(2, 2),
+            empty_entry(2, 3),
+            empty_entry(3, 4),
+            empty_entry(3, 5),
+            empty_entry(3, 6),
+            empty_entry(3, 7),
+            empty_entry(3, 8),
+        ])
+        .unwrap();
+    let mut r = new_test_raft(1, vec![1, 2, 3, 4, 5], 10, 1, storage).unwrap();
+    r.become_candidate();
+    r.become_leader();
+    r.term = 7;
+    r.step(&Message::new_propose_msg(10, 1, vec![empty_entry(7, 9)]));
+    drop(r.read_messages());
+
+    // idx: 1  2  3  4  5  6  7  8  9  10
+    // L  : 1  2  2  3  3  3  3  3  7  8
+    // F2 : 1  3  3  4  4  4  5  5  6
+    // F3 : 1  2  3  5  5
+    // F4 : 1  2  2  3
+    // F5 : 1  2  3  5  5
+
+    let replys = vec![
+        Message::new_append_resp_msg(2, 1, r.term, true, 8, 5),
+        Message::new_append_resp_msg(3, 1, r.term, true, 3, 3),
+        Message::new_append_resp_msg(4, 1, r.term, false, 3, 2),
+    ];
+
+    let append_msg_generator =
+        |to: u64, prev_log_index: u64, prev_log_term: u64, ents: Vec<(u64, u64)>| {
+            let entries = ents.iter().map(|&(i, t)| empty_entry(t, i)).collect();
+            Message::new_append_msg(1, to, 7, 0, prev_log_index, prev_log_term, entries)
+        };
+
+    let appends = vec![
+        append_msg_generator(2, 7, 3, vec![(7, 3), (8, 3), (9, 7)]),
+        append_msg_generator(
+            3,
+            2,
+            2,
+            vec![
+                (2, 2),
+                (3, 2),
+                (4, 3),
+                (5, 3),
+                (6, 3),
+                (7, 3),
+                (8, 3),
+                (9, 7),
+            ],
+        ),
+    ];
+    for reply in replys {
+        r.step(&reply);
+    }
+    let mut msgs = r.read_messages();
+    msgs.sort_by_key(|m| format!("{:?}", m));
+    assert_eq!(2, msgs.len());
+    msgs.iter()
+        .zip(appends.iter())
+        .for_each(|(res, wres)| assert_eq!(res, wres));
+
+    let replys_2 = vec![
+        Message::new_append_resp_msg(2, 1, r.term, true, 3, 3),
+        Message::new_append_resp_msg(3, 1, r.term, false, 9, 7),
+        Message::new_append_resp_msg(5, 1, r.term, true, 3, 3),
+    ];
+
+    replys_2.iter().for_each(|reply| r.step(&reply));
+    let msgs = r.read_messages();
+    assert_eq!(1, msgs.len()); // receive majory append successful reply, 2 + 1 = 3 > 2
+    assert_eq!(
+        msgs[0],
+        append_msg_generator(
+            2,
+            2,
+            2,
+            vec![
+                (2, 2),
+                (3, 2),
+                (4, 3),
+                (5, 3),
+                (6, 3),
+                (7, 3),
+                (8, 3),
+                (9, 7)
+            ]
+        )
+    );
 }

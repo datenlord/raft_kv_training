@@ -3,8 +3,9 @@ use crate::log::RaftLog;
 use crate::message::MsgData;
 use crate::{config::Config, INVALID_ID};
 use crate::{
-    Entry, HardState, LogError, Message, MsgAppend, MsgHeartbeat, MsgHeartbeatResponse, MsgPropose,
-    MsgRequestVote, MsgRequestVoteResponse, Progress, RaftError, Storage,
+    Entry, HardState, LogError, Message, MsgAppend, MsgAppendResponse, MsgHeartbeat,
+    MsgHeartbeatResponse, MsgPropose, MsgRequestVote, MsgRequestVoteResponse, Progress, RaftError,
+    Storage,
 };
 use getset::{Getters, MutGetters, Setters};
 use rand::Rng;
@@ -102,6 +103,9 @@ pub struct Raft<T: Storage> {
     /// The log progress of all nodes in the cluster
     #[get_mut = "pub"]
     progresses: HashMap<u64, Progress>,
+
+    /// success append message counter
+    append_counter: usize,
 }
 
 impl<T: Storage> Raft<T> {
@@ -139,6 +143,7 @@ impl<T: Storage> Raft<T> {
             raft_log: RaftLog::new(storage),
             msgs: Vec::new(),
             progresses: HashMap::with_capacity(peers.len()),
+            append_counter: 0,
         };
         for id in peers {
             let _ = raft.progresses.insert(
@@ -254,6 +259,7 @@ impl<T: Storage> Raft<T> {
             Some(MsgData::RequestVote(m)) => self.handle_request_vote_msg(&m),
             Some(MsgData::RequestVoteResponse(m)) => self.handle_request_vote_reply(&m),
             Some(MsgData::Append(ref m)) => self.handle_append_entries_msg(m),
+            Some(MsgData::AppendResponse(ref m)) => self.handle_append_entries_reply(m),
             Some(MsgData::Propose(ref m)) => self.handle_propose_msg(m),
             _ => unreachable!(),
         }
@@ -395,10 +401,105 @@ impl<T: Storage> Raft<T> {
                 self.send(new_propose_msg);
             }
         } else {
+            // If the follower has an uncommitted log tail, we would end up
+            // probing one by one until we hit the common prefix.
+            //
+            // For example, if the leader has:
+            //
+            //   idx        1 2 3 4 5 6 7 8 9
+            //              -----------------
+            //   term (L)   1 3 3 3 5 5 5 5 5
+            //   term (F)   1 1 1 1 2 2
+            //
+            // Then, after sending an append anchored at (idx=9,term=5) we
+            // would receive a RejectHint of 6 and LogTerm of 2. Without the
+            // code below, we would try an append at index 6, which would
+            // fail again.
+            //
+            // However, looking only at what the leader knows about its own
+            // log and the rejection hint, it is clear that a probe at index
+            // 6, 5, 4, 3, and 2 must fail as well:
+            //
+            // For all of these indexes, the leader's log term is larger than
+            // the rejection's log term. If a probe at one of these indexes
+            // succeeded, its log term at that index would match the leader's,
+            // i.e. 3 or 5 in this example. But the follower already told the
+            // leader that it is still at term 2 at index 9, and since the
+            // log term only ever goes up (within a log), this is a contradiction.
+            //
+            // At index 1, however, the leader can draw no such conclusion,
+            // as its term 1 is not larger than the term 2 from the
+            // follower's rejection. We thus probe at 1, which will succeed
+            // in this example. In general, with this approach we probe at
+            // most once per term found in the leader's log.
+            //
+            // There is a similar mechanism on the follower (implemented in
+            // handleAppendEntries via a call to findConflictByTerm) that is
+            // useful if the follower has a large divergent uncommitted log
+            // tail[1], as in this example:
+            //
+            //   idx        1 2 3 4 5 6 7 8 9
+            //              -----------------
+            //   term (L)   1 3 3 3 3 3 3 3 7
+            //   term (F)   1 3 3 4 4 5 5 5 6
+            //
+            // Naively, the leader would probe at idx=9, receive a rejection
+            // revealing the log term of 6 at the follower. Since the leader's
+            // term at the previous index is already smaller than 6, the leader-
+            // side optimization discussed above is ineffective. The leader thus
+            // probes at index 8 and, naively, receives a rejection for the same
+            // index and log term 5. Again, the leader optimization does not improve
+            // over linear probing as term 5 is above the leader's term 3 for that
+            // and many preceding indexes; the leader would have to probe linearly
+            // until it would finally hit index 3, where the probe would succeed.
+            //
+            // Instead, we apply a similar optimization on the follower. When the
+            // follower receives the probe at index 8 (log term 3), it concludes
+            // that all of the leader's log preceding that index has log terms of
+            // 3 or below. The largest index in the follower's log with a log term
+            // of 3 or below is index 3. The follower will thus return a rejection
+            // for index=3, log term=3 instead. The leader's next probe will then
+            // succeed at that index.
+            //
+            // [1]: more precisely, if the log terms in the large uncommitted
+            // tail on the follower are larger than the leader's. At first,
+            // it may seem unintuitive that a follower could even have such
+            // a large tail, but it can happen:
+            //
+            // 1. Leader appends (but does not commit) entries 2 and 3, crashes.
+            //   idx        1 2 3 4 5 6 7 8 9
+            //              -----------------
+            //   term (L)   1 2 2     [crashes]
+            //   term (F)   1
+            //   term (F)   1
+            //
+            // 2. a follower becomes leader and appends entries at term 3.
+            //              -----------------
+            //   term (x)   1 2 2     [down]
+            //   term (F)   1 3 3 3 3
+            //   term (F)   1
+            //
+            // 3. term 3 leader goes down, term 2 leader returns as term 4
+            //    leader. It commits the log & entries at term 4.
+            //
+            //              -----------------
+            //   term (L)   1 2 2 2
+            //   term (x)   1 3 3 3 3 [down]
+            //   term (F)   1
+            //              -----------------
+            //   term (L)   1 2 2 2 4 4 4
+            //   term (F)   1 3 3 3 3 [gets probed]
+            //   term (F)   1 2 2 2 4 4 4
+            //
+            // 4. the leader will now probe the returning follower at index
+            //    7, the rejection points it at the end of the follower's log
+            //    which is at a higher log term than the actually committed
+            //    log.
             let (commit_index, _) = self.raft_log.commit_info();
             let mut ents = msg.entries.clone();
             if self.append_entry(&mut ents[..]) {
                 self.raft_log.persist_log_buffer();
+                self.append_counter += 1;
                 for (id, progress) in self.progresses.clone() {
                     if id == self.id {
                         continue;
@@ -485,15 +586,68 @@ impl<T: Storage> Raft<T> {
             }
         };
 
+        let (prev_log_index, prev_log_term) = if reject {
+            if self
+                .raft_log
+                .match_term(msg.prev_log_index, msg.prev_log_term)
+            {
+                (msg.prev_log_index, msg.prev_log_term)
+            } else {
+                self.raft_log
+                    .get_next_unconfilict_index(msg.prev_log_index, msg.prev_log_term)
+            }
+        } else {
+            (self.raft_log.buffer_last_index(), self.raft_log.last_term())
+        };
+
         let append_reply = Message::new_append_resp_msg(
             self.id,
             msg.from,
             self.term,
             reject,
-            self.raft_log.buffer_last_index(),
-            self.raft_log.last_term(),
+            prev_log_index,
+            prev_log_term,
         );
         self.send(append_reply);
+    }
+
+    /// count the successful append reply number
+    #[allow(clippy::integer_arithmetic)]
+    #[inline]
+    fn majority_append_success(&self) -> bool {
+        self.append_counter > (self.progresses.len() / 2)
+    }
+
+    /// append message reply message's handler
+    #[allow(clippy::integer_arithmetic, clippy::expect_used)]
+    #[inline]
+    fn handle_append_entries_reply(&mut self, msg: &MsgAppendResponse) {
+        if self.majority_append_success() {
+            self.append_counter = 0;
+            return;
+        }
+        if msg.reject {
+            let (commit_idx, _) = self.raft_log.commit_info();
+            let (index, term) = self
+                .raft_log
+                .get_next_unconfilict_index(msg.last_log_index, msg.last_log_term);
+            // Because index is always valid, `entries` should never return any index error
+            // It's ok to expect here.
+            let entries = self
+                .raft_log
+                .entries(index, self.raft_log.buffer_last_index())
+                .expect("Undefined behaviour");
+            let append_msg = Message::new_append_msg(
+                self.id, msg.from, self.term, commit_idx, index, term, entries,
+            );
+            self.send(append_msg);
+        } else {
+            if let Some(pr) = self.progresses.get_mut(&msg.from) {
+                pr.log_index = msg.last_log_index;
+                pr.log_term = msg.last_log_term;
+            }
+            self.append_counter += 1;
+        }
     }
 
     /// Load the given `hardstate` into self

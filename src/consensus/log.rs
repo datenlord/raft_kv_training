@@ -327,6 +327,7 @@ impl<T: Storage> RaftLog<T> {
             let storage_last_idx = self.store.last_index();
             let storage_last_term = self.store.last_term();
             // check the last entry in the storage before
+
             if index > self.store.last_index() && term >= storage_last_term {
                 if let Ok(ents) = self.store.entries(storage_last_idx, storage_last_idx) {
                     ents.first().map_or_else(
