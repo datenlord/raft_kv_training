@@ -1,6 +1,6 @@
 use crate::{down_cast, Entry, LogError, RaftError, Storage, INVALID_INDEX, INVALID_TERM};
 use getset::{Getters, MutGetters};
-use std::fmt::Display;
+use std::{cmp::Ordering, fmt::Display};
 
 /// Raft log implementation
 #[allow(clippy::module_name_repetitions)]
@@ -249,6 +249,96 @@ impl<T: Storage> RaftLog<T> {
             }
         }
         None
+    }
+
+    /// find the index of the last entry whose term is less or equal to the given term in the storage backend `[first_index..index)`
+    #[allow(clippy::integer_arithmetic)]
+    #[inline]
+    fn search_in_storage(&self, index: u64, term: u64) -> Option<(u64, u64)> {
+        let mut low = self.store.first_index();
+        let mut high = index;
+        assert!(
+            high <= self.store.last_index(),
+            "index is not allowed to be larger or equal than the last index of storage"
+        );
+
+        while low < high {
+            let mid = (low + high) / 2;
+            if let Ok(log_term) = self.store.term(mid) {
+                match log_term.cmp(&term) {
+                    Ordering::Less | Ordering::Equal => low = mid + 1,
+                    Ordering::Greater => high = mid,
+                }
+            }
+        }
+
+        if high == 0 {
+            None
+        } else if let Ok(ents) = self.store.entries(low - 1, high - 1) {
+            ents.first().map(|ent| (ent.index, ent.term))
+        } else {
+            None
+        }
+    }
+
+    /// find the index of the last entry whose term is less or equal to the given term in the `log_buffer[0..index)`
+    #[allow(
+        clippy::integer_arithmetic,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::cast_possible_truncation
+    )]
+    #[inline]
+    fn search_in_buffer(&self, index: u64, term: u64) -> Option<(u64, u64)> {
+        let first_idx = self.buffer_first_index();
+        if first_idx >= index {
+            None
+        } else {
+            let mut low: usize = 0;
+            // Converting u64 to usize on a 64-bit machine should never overflow
+            // If `index` - `first_idx` is larger than `u32::MAX`, then indicates that
+            // `log_buffer` possesses at least `u32::MAX` entries. This will consume at
+            // least 48GB memory. Before `index` - `first_idx` overflowed, OOM will kill
+            // the program. So it's ok to turn off clippy::as_conversions here.
+            let mut high = (index - first_idx) as usize;
+            while low < high {
+                let mid = (low + high) / 2;
+                match self.log_buffer[mid].term.cmp(&term) {
+                    Ordering::Equal | Ordering::Less => low = mid + 1,
+                    Ordering::Greater => high = mid,
+                }
+            }
+
+            if high == 0 {
+                None
+            } else {
+                self.log_buffer
+                    .get(high - 1)
+                    .map(|ent| (ent.index, ent.term))
+            }
+        }
+    }
+
+    /// find the last entry whose term is not greater than the given term in all entries before the given index in the raft log
+    #[inline]
+    pub fn get_next_unconfilict_index(&self, index: u64, term: u64) -> Option<(u64, u64)> {
+        if let Some((index, term)) = self.search_in_buffer(index, term) {
+            Some((index, term))
+        } else {
+            let storage_last_idx = self.store.last_index();
+            let storage_last_term = self.store.last_term();
+            if index > self.store.last_index() && term >= storage_last_term {
+                if let Ok(ents) = self.store.entries(storage_last_idx, storage_last_idx) {
+                    ents.first().map(|ent| (ent.index, ent.term))
+                } else {
+                    // The `storage_last_term` is always valid so `entries` should never return any error.
+                    // If it does, there must be something undefined happen, it's ok to crash here.
+                    unreachable!()
+                }
+            } else {
+                self.search_in_storage(storage_last_idx, term)
+            }
+        }
     }
 
     /// Store the log buffer to the storage backend, if there is any
@@ -505,6 +595,106 @@ mod tests {
         for (low, high, wres) in tests {
             let res = raft_log.entries(low, high);
             result_eq!(res, wres);
+        }
+    }
+
+    #[test]
+    fn test_search_in_buffer() {
+        let storage = MemStorage::new();
+        storage
+            .wl()
+            .append(&[new_entry(1, 1), new_entry(2, 1)])
+            .unwrap();
+        let mut raft_log = RaftLog::new(storage);
+        raft_log
+            .append(&[
+                new_entry(3, 2),
+                new_entry(4, 2),
+                new_entry(5, 4),
+                new_entry(6, 4),
+                new_entry(7, 4),
+                new_entry(8, 5),
+                new_entry(9, 5),
+                new_entry(10, 6),
+                new_entry(11, 7),
+            ])
+            .unwrap();
+        let tests = vec![
+            (5, 1, None),
+            (2, 2, None),
+            (4, 2, Some((3, 2))),
+            (6, 3, Some((4, 2))),
+            (10, 6, Some((9, 5))),
+        ];
+        for (index, term, wres) in tests {
+            let res = raft_log.search_in_buffer(index, term);
+            assert_eq!(res, wres);
+        }
+    }
+
+    #[test]
+    fn test_search_in_storage() {
+        let storage = MemStorage::new();
+        storage
+            .wl()
+            .append(&[
+                new_entry(1, 2),
+                new_entry(2, 2),
+                new_entry(3, 2),
+                new_entry(4, 2),
+                new_entry(5, 4),
+                new_entry(6, 4),
+                new_entry(7, 4),
+                new_entry(8, 5),
+                new_entry(9, 5),
+                new_entry(10, 6),
+                new_entry(11, 7),
+            ])
+            .unwrap();
+        let raft_log = RaftLog::new(storage);
+
+        let tests = vec![
+            (7, 3, Some((4, 2))),
+            (7, 4, Some((6, 4))),
+            (5, 4, Some((4, 2))),
+            (8, 6, Some((7, 4))),
+            (1, 2, None),
+            (10, 1, None),
+        ];
+        for (index, term, wres) in tests {
+            let res = raft_log.search_in_storage(index, term);
+            assert_eq!(res, wres);
+        }
+    }
+
+    #[test]
+    fn test_get_next_unconfilict_index() {
+        let storage = MemStorage::new();
+        storage
+            .wl()
+            .append(&[
+                new_entry(1, 1),
+                new_entry(2, 2),
+                new_entry(3, 2),
+                new_entry(4, 4),
+                new_entry(5, 4),
+                new_entry(6, 4),
+            ])
+            .unwrap();
+        let mut raft_log = RaftLog::new(storage);
+        raft_log
+            .append(&[
+                new_entry(7, 5),
+                new_entry(8, 5),
+                new_entry(9, 6),
+                new_entry(10, 7),
+                new_entry(11, 7),
+            ])
+            .unwrap();
+        let tests = vec![(9, 6, Some((8, 5))), (8, 3, Some((3, 2)))];
+        for (index, term, wres) in tests {
+            let res = raft_log.get_next_unconfilict_index(index, term);
+            assert_eq!(res, wres);
         }
     }
 }
