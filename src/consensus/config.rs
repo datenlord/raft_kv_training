@@ -66,4 +66,16 @@ impl Config {
         }
         Ok(())
     }
+
+    /// Generate a new Config with the given `id`, `election_tick`, and `heartbeat_tick`.
+    #[must_use]
+    #[inline]
+    pub fn new(id: u64, election_tick: usize, heartbeat_tick: usize) -> Config {
+        Config {
+            id,
+            election_tick,
+            heartbeat_tick,
+            ..Default::default()
+        }
+    }
 }

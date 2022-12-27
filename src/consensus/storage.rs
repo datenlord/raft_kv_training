@@ -1,16 +1,20 @@
-use crate::{ConfState, Entry, HardState, RaftError, StorageError, INVALID_INDEX};
+use crate::{
+    down_cast, ConfState, Entry, HardState, LogError, RaftError, INVALID_INDEX, INVALID_TERM,
+};
 use getset::{Getters, MutGetters, Setters};
+use std::cmp::{max, min};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// Holds both the hard state {term, commit index, vote leader} and the configuration state
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, Getters, Setters, MutGetters)]
 pub struct RaftState {
     /// Contains the last meta information including commit index, the vote leader, and the vote term.
-    #[getset(get, set, get_mut)]
+    #[getset(get = "pub", set, get_mut)]
     hard_state: HardState,
     /// Records the current node IDs like `[1, 2, 3]` in the cluster.
     #[getset(set)]
-    conf_state: ConfState,
+    pub conf_state: ConfState,
 }
 
 impl RaftState {
@@ -46,7 +50,7 @@ pub trait Storage {
     /// created with a configuration, and its last index and term should be greater than 0.
     fn initial_state(&self) -> RaftState;
 
-    /// Returns a slice of log entries in the range `[low, high)`.
+    /// Returns a slice of log entries in the range `[low, high]`.
     /// The slice of entries returned will always have length at least 1 if entries are
     /// found in the range.
     ///
@@ -95,36 +99,39 @@ pub struct MemStorageCore {
 }
 
 impl MemStorageCore {
-    /// check whether there is an entry at the given index of `entries`
+    /// get the entry from the given index
+    ///
+    /// # Errors
+    ///
+    /// return `LogEntryUnavailable` if `entries`
+    #[allow(clippy::indexing_slicing, clippy::integer_arithmetic)]
     #[inline]
-    fn has_entry_at(&self, index: u64) -> Result<(), RaftError> {
-        if index == INVALID_INDEX {
-            return Err(RaftError::Store(StorageError::InvalidIndex(index)));
-        }
+    fn get_entry(&self, idx: u64) -> Result<&Entry, RaftError> {
+        let first_idx = self.first_index();
         let last_idx = self.last_index();
-        if index > last_idx {
-            return Err(RaftError::Store(StorageError::Unavailable(last_idx, index)));
+        match (first_idx, last_idx) {
+            (Some(first), Some(last)) => {
+                if idx <= last {
+                    let offset: usize = down_cast(idx - first)?;
+                    Ok(&self.entries[offset])
+                } else {
+                    Err(RaftError::Log(LogError::LogEntryUnavailable(idx)))
+                }
+            }
+            (None, Some(_) | None) | (Some(_), None) => {
+                Err(RaftError::Log(LogError::LogEntryUnavailable(idx)))
+            }
         }
-        Ok(())
     }
 
     /// get the index of the first entry in the `entries`
-    fn first_index(&self) -> u64 {
-        /// When `self.entries` is empty, `FIRST_INDEX` represents the first valid entry index
-        /// `FIRST_INDEX` = `INVALID_INDEX` + 1
-        const FIRST_INDEX: u64 = 1;
-        match self.entries.first() {
-            Some(e) => e.index,
-            None => FIRST_INDEX,
-        }
+    fn first_index(&self) -> Option<u64> {
+        self.entries.first().map(|e| e.index)
     }
 
     /// get the index of the last entry in the `entries`
-    fn last_index(&self) -> u64 {
-        match self.entries.last() {
-            Some(e) => e.index,
-            None => INVALID_INDEX,
-        }
+    fn last_index(&self) -> Option<u64> {
+        self.entries.last().map(|e| e.index)
     }
 
     /// Append the new entries to storage.
@@ -133,32 +140,29 @@ impl MemStorageCore {
     ///
     /// return `RaftError` if the index of the first entry in the `entries`is larger than the `last_index`()
     #[inline]
-    #[allow(clippy::integer_arithmetic)]
+    #[allow(clippy::integer_arithmetic, clippy::indexing_slicing)]
     pub fn append(&mut self, ents: &[Entry]) -> Result<(), RaftError> {
-        if let Some(first_entry) = ents.first() {
-            let first_index = self.first_index();
-            // TODO: consider raft log compacted
-
-            let last_index = self.last_index();
-            if last_index + 1 < first_entry.index {
-                return Err(RaftError::Store(StorageError::Unavailable(
-                    last_index,
-                    first_entry.index,
-                )));
-            }
-
-            // Remove all entries overwritten by `ents`.
-            let diff = first_entry.index - first_index;
-            let diff: usize = diff
-                .try_into()
-                .map_err(|e| RaftError::Others(Box::new(e)))?;
-            {
-                let _drain_res = self.entries.drain(diff..);
-            }
-            self.entries.extend_from_slice(ents);
+        if ents.is_empty() {
+            return Ok(());
         }
+        let ents_first_idx = ents[0].index;
+        let first_idx = self
+            .first_index()
+            .map_or_else(|| INVALID_INDEX + 1, |first| first);
 
-        Ok(())
+        let last_idx = self.last_index().map_or_else(|| INVALID_INDEX, |last| last);
+
+        if last_idx + 1 < ents_first_idx {
+            Err(RaftError::Log(LogError::Unavailable(
+                last_idx,
+                ents_first_idx,
+            )))
+        } else {
+            let offset: usize = down_cast(ents_first_idx - first_idx)?;
+            drop(self.entries.drain(offset..));
+            self.entries.extend_from_slice(ents);
+            Ok(())
+        }
     }
 
     /// Commit to an index.
@@ -168,17 +172,15 @@ impl MemStorageCore {
     /// return `RaftError` if there is no such entry in raft logs.
     #[inline]
     #[allow(clippy::integer_arithmetic, clippy::indexing_slicing)]
-    pub fn commit_to(&mut self, index: u64) -> Result<(), RaftError> {
-        self.has_entry_at(index)?;
-        // It's OK to allow `indexing_slicing` in that the previous `has_entry_at` has provided
-        // that the zero and `offset` is safe to be used as a index of `self.entries`.
-        let offset: usize = (index - self.first_index())
-            .try_into()
-            .map_err(|e| RaftError::Others(Box::new(e)))?;
+    pub fn commit_to(&mut self, idx: u64) -> Result<(), RaftError> {
+        if idx == INVALID_INDEX {
+            return Ok(());
+        }
+        let entry = self.get_entry(idx)?;
 
-        let term = self.entries[offset].term;
+        let term = entry.term;
         let hard_state = self.raft_state_mut().hard_state_mut();
-        hard_state.commit = index;
+        hard_state.committed = idx;
         hard_state.term = term;
         Ok(())
     }
@@ -224,7 +226,7 @@ impl MemStorage {
     ///
     /// You should use the same input to initialize all nodes.
     #[inline]
-    fn initialize_with_conf_state<T>(&self, conf_state: T)
+    pub fn initialize_with_conf_state<T>(&self, conf_state: T)
     where
         ConfState: From<T>,
     {
@@ -258,44 +260,60 @@ impl Storage for MemStorage {
     #[allow(clippy::integer_arithmetic, clippy::indexing_slicing)]
     #[inline]
     fn entries(&self, low: u64, high: u64) -> Result<Vec<Entry>, RaftError> {
-        let core = self.wl();
-        let last_idx = core.last_index();
-        if high > last_idx + 1 {
-            return Err(RaftError::Store(StorageError::Unavailable(
-                last_idx + 1,
-                high,
-            )));
+        if low > high {
+            return Ok(vec![]);
         }
 
-        let offset = core.entries[0].index;
-        let lo = (low - offset)
-            .try_into()
-            .map_err(|e| RaftError::Others(Box::new(e)))?;
-        let hi = (high - offset)
-            .try_into()
-            .map_err(|e| RaftError::Others(Box::new(e)))?;
-        Ok(core.entries[lo..hi].to_vec())
+        let first_idx = self.first_index();
+        let last_idx = self.last_index();
+        if first_idx == INVALID_INDEX + 1 || last_idx == INVALID_INDEX {
+            Err(RaftError::Log(LogError::Unavailable(low, high)))
+        } else {
+            let core = self.wl();
+            if low < first_idx {
+                return Err(RaftError::Log(LogError::Unavailable(
+                    low,
+                    min(high, first_idx - 1),
+                )));
+            }
+
+            if high > last_idx {
+                return Err(RaftError::Log(LogError::Unavailable(
+                    max(low, last_idx + 1),
+                    high,
+                )));
+            }
+
+            let lo: usize = down_cast(low - first_idx)?;
+            let hi: usize = down_cast(high - first_idx)?;
+            Ok(core.entries[lo..=hi].to_vec())
+        }
     }
 
     #[inline]
+    #[allow(clippy::integer_arithmetic)]
     fn first_index(&self) -> u64 {
-        self.rl().first_index()
+        self.rl()
+            .first_index()
+            .map_or_else(|| INVALID_INDEX + 1, |first| first)
     }
 
     #[inline]
     fn last_index(&self) -> u64 {
-        self.rl().last_index()
+        self.rl()
+            .last_index()
+            .map_or_else(|| INVALID_INDEX, |last| last)
     }
 
     #[allow(clippy::indexing_slicing, clippy::integer_arithmetic)]
     #[inline]
-    fn term(&self, index: u64) -> Result<u64, RaftError> {
+    fn term(&self, idx: u64) -> Result<u64, RaftError> {
+        if idx == INVALID_INDEX {
+            return Ok(INVALID_TERM);
+        }
         let core = self.rl();
-        core.has_entry_at(index)?;
-        let offset: usize = (index - core.first_index())
-            .try_into()
-            .map_err(|e| RaftError::Others(Box::new(e)))?;
-        Ok(core.entries[offset].term)
+        let entry = core.get_entry(idx)?;
+        Ok(entry.term)
     }
 
     #[inline]
@@ -306,7 +324,9 @@ impl Storage for MemStorage {
 
 #[cfg(test)]
 mod test {
-    use crate::{result_eq, Entry, HardState, RaftError, StorageError};
+    use std::vec;
+
+    use crate::{result_eq, Entry, HardState, LogError, RaftError};
 
     use super::{MemStorage, Storage};
 
@@ -325,10 +345,7 @@ mod test {
             (1, Ok(4)),
             (2, Ok(5)),
             (3, Ok(6)),
-            (
-                4,
-                Err(RaftError::Store(crate::StorageError::Unavailable(3, 4))),
-            ),
+            (4, Err(RaftError::Log(LogError::LogEntryUnavailable(4)))),
         ];
 
         let storage = MemStorage::new();
@@ -342,25 +359,38 @@ mod test {
 
     #[test]
     fn test_storage_entries() {
-        let ents = vec![
-            new_entry(1, 1),
-            new_entry(2, 2),
-            new_entry(3, 3),
-            new_entry(4, 4),
-        ];
-        let tests = vec![
-            (2, 6, Err(RaftError::Store(StorageError::Unavailable(5, 6)))),
-            (2, 3, Ok(vec![new_entry(2, 2)])),
-            (3, 4, Ok(vec![new_entry(3, 3)])),
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let tests_1 = vec![
+            (2, 1, Ok(vec![])),
+            (1, 2, Err(RaftError::Log(LogError::Unavailable(1, 2)))),
+            (2, 4, Err(RaftError::Log(LogError::Unavailable(2, 2)))),
+            (2, 3, Err(RaftError::Log(LogError::Unavailable(2, 2)))),
+            (4, 4, Ok(vec![new_entry(4, 4)])),
+            (3, 4, Ok(vec![new_entry(3, 3), new_entry(4, 4)])),
             (
-                2,
+                3,
                 5,
-                Ok(vec![new_entry(2, 2), new_entry(3, 3), new_entry(4, 4)]),
+                Ok(vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)]),
             ),
+            (4, 6, Err(RaftError::Log(LogError::Unavailable(6, 6)))),
+            (6, 7, Err(RaftError::Log(LogError::Unavailable(6, 7)))),
+            (1, 7, Err(RaftError::Log(LogError::Unavailable(1, 2)))),
         ];
         let storage = MemStorage::new();
         storage.wl().entries = ents;
-        for (low, high, wentries) in tests {
+        for (low, high, wentries) in tests_1 {
+            let e = storage.entries(low, high);
+            result_eq!(e, wentries);
+        }
+
+        let tests_2 = vec![
+            (1, 2, Err(RaftError::Log(LogError::Unavailable(1, 2)))),
+            (4, 5, Err(RaftError::Log(LogError::Unavailable(4, 5)))),
+            (1, 10, Err(RaftError::Log(LogError::Unavailable(1, 10)))),
+            (2, 1, Ok(vec![])),
+        ];
+        let storage = MemStorage::new();
+        for (low, high, wentries) in tests_2 {
             let e = storage.entries(low, high);
             result_eq!(e, wentries);
         }
@@ -372,7 +402,6 @@ mod test {
         let storage = MemStorage::new();
         storage.wl().entries = ents;
         assert_eq!(storage.first_index(), 1);
-
         // TODO: considering the compact case
     }
 
@@ -426,7 +455,7 @@ mod test {
             // append entries whose index is greater than the last_index is not allowed
             (
                 vec![new_entry(7, 3), new_entry(8, 3), new_entry(9, 5)],
-                Err(RaftError::Store(crate::StorageError::Unavailable(3, 7))),
+                Err(RaftError::Log(LogError::Unavailable(3, 7))),
                 None,
             ),
             // truncate the existing entries and append
@@ -452,24 +481,21 @@ mod test {
     fn test_storage_commit_to_and_set_conf_state() {
         let ents = vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)];
         let tests: Vec<(u64, Option<HardState>, Result<(), RaftError>)> = vec![
-            (
-                0,
-                None,
-                Err(RaftError::Store(StorageError::InvalidIndex(0))),
-            ),
+            (0, None, Ok(())),
             (
                 2,
                 Some(HardState {
                     term: 2,
-                    commit: 2,
-                    vote: 0,
+                    committed: 2,
+                    voted_for: 0,
+                    applied: 0,
                 }),
                 Ok(()),
             ),
             (
                 5,
                 None,
-                Err(RaftError::Store(StorageError::Unavailable(3, 5))),
+                Err(RaftError::Log(LogError::LogEntryUnavailable(5))),
             ),
         ];
 
