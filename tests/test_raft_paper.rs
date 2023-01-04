@@ -3,7 +3,6 @@ use raft_kv::consensus::raft::*;
 use raft_kv::{map, Entry, Message};
 use raft_kv::{Config, HardState, MemStorage, Raft, RaftError, Storage, INVALID_ID};
 use std::collections::HashMap;
-use std::fmt::Debug;
 use std::vec;
 
 fn new_test_raft(
@@ -28,7 +27,7 @@ fn empty_entry(term: u64, index: u64) -> Entry {
 }
 
 #[test]
-fn start_as_follower_2aa() {
+fn test_start_as_follower_2aa_initial() {
     let config = Config::new(1, 10, 1);
     let store = MemStorage::new();
     let r = Raft::new(&config, store).unwrap();
@@ -36,12 +35,12 @@ fn start_as_follower_2aa() {
 }
 
 #[test]
-fn test_follower_start_election() {
+fn test_follower_start_election_2aa_election() {
     test_nonleader_start_election(State::Follower);
 }
 
 #[test]
-fn test_candidate_start_new_election() {
+fn test_candidate_start_new_election_2aa_election() {
     test_nonleader_start_election(State::Candidate);
 }
 
@@ -86,12 +85,12 @@ fn test_nonleader_start_election(role: State) {
 }
 
 #[test]
-fn test_follower_election_timeout_randomized() {
+fn test_follower_election_timeout_randomized_2aa_initial() {
     test_non_leader_election_timeout_randomized(State::Follower);
 }
 
 #[test]
-fn test_candidate_election_timeout_randomized() {
+fn test_candidate_election_timeout_randomized_2aa_initial() {
     test_non_leader_election_timeout_randomized(State::Candidate);
 }
 
@@ -126,12 +125,12 @@ fn test_non_leader_election_timeout_randomized(state: State) {
 }
 
 #[test]
-fn test_follower_election_timeout_nonconflict() {
+fn test_follower_election_timeout_nonconflict_2aa_initial() {
     test_nonleaders_election_timeout_nonconfict(State::Follower);
 }
 
 #[test]
-fn test_candidates_election_timeout_nonconflict() {
+fn test_candidates_election_timeout_nonconflict_2aa_initial() {
     test_nonleaders_election_timeout_nonconfict(State::Candidate);
 }
 
@@ -180,7 +179,7 @@ fn test_nonleaders_election_timeout_nonconfict(state: State) {
 // heartbeat to all followers.
 // Reference: section 5.2
 #[test]
-fn test_leader_bcast_beat() {
+fn test_leader_bcast_beat_2aa_election() {
     // heartbeat interval
     let hi = 1;
     let mut r = new_test_raft(1, vec![1, 2, 3], 10, hi, MemStorage::new()).unwrap();
@@ -205,7 +204,7 @@ fn test_leader_bcast_beat() {
 }
 
 #[test]
-fn test_handle_heartbeat() {
+fn test_handle_heartbeat_2aa_heartbeat() {
     let successes = vec![
         (
             Message::new_heartbeat_msg(2, 1, 2),
@@ -267,9 +266,9 @@ fn test_handle_heartbeat() {
     }
 }
 
-// test_handle_heartbeat_resp ensures that we re-send log entries when we get a heartbeat response.
+// test_handle_heartbeat_resp_2aa_heartbeat ensures that we re-send log entries when we get a heartbeat response.
 #[test]
-fn test_handle_heartbeat_resp() {
+fn test_handle_heartbeat_resp_2aa_heartbeat() {
     let mut r = new_test_raft(1, vec![1, 2], 5, 1, MemStorage::new()).unwrap();
     r.become_candidate();
     r.become_leader();
@@ -279,11 +278,11 @@ fn test_handle_heartbeat_resp() {
     assert_eq!(r.role, State::Follower);
 }
 
-// test_follower_vote tests that each follower will vote for at most one
+// test_follower_vote_2aa_election tests that each follower will vote for at most one
 // candidate in a given term, on a first-come-first-served basis.
 // Reference: section 5.2
 #[test]
-fn test_follower_vote() {
+fn test_follower_vote_2aa_election() {
     let tests = vec![
         (INVALID_ID, 1, false),
         (INVALID_ID, 2, false),
@@ -317,11 +316,11 @@ fn test_follower_vote() {
     }
 }
 
-// test_voter tests the voter denies its vote if its own log is more up-to-date
+// test_voter_2aa_election tests the voter denies its vote if its own log is more up-to-date
 // than that of the candidate.
 // Reference: section 5.4.1
 #[test]
-fn test_voter() {
+fn test_voter_2aa_election() {
     let tests = vec![
         // same log term
         (vec![empty_entry(1, 1)], 1, 1, false, 1, 1),
@@ -361,7 +360,7 @@ fn test_voter() {
 }
 
 #[test]
-fn test_vote_from_any_state() {
+fn test_vote_from_any_state_2aa_election() {
     for state in [State::Follower, State::Candidate, State::Leader] {
         let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new()).unwrap();
         r.term = 1;
@@ -403,14 +402,14 @@ fn test_vote_from_any_state() {
     }
 }
 
-// test_leader_election_in_one_round_rpc tests all cases that may happen in
+// test_leader_election_in_one_round_rpc_2aa_election tests all cases that may happen in
 // leader election during one round of RequestVote RPC:
 // a) it wins the election
 // b) it loses the election
 // c) it is unclear about the result
 // Reference: section 5.2
 #[test]
-fn test_leader_election_in_one_round_rpc() {
+fn test_leader_election_in_one_round_rpc_2aa_election() {
     let tests = vec![
         // win the election when receiving votes from a majority of the servers
         (1, map!(), State::Leader),
@@ -467,7 +466,7 @@ fn test_leader_election_in_one_round_rpc() {
 // MsgHeartbeat from leader, "step" resets the term
 // with leader's and reverts back to follower.
 #[test]
-fn test_candidate_reset_term_msg_heartbeat() {
+fn test_candidate_reset_term_msg_heartbeat_2aa_heartbeat() {
     let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new()).unwrap();
     r.become_candidate();
     r.step(&Message::new_heartbeat_msg(2, 1, 3));
@@ -475,7 +474,7 @@ fn test_candidate_reset_term_msg_heartbeat() {
 }
 
 #[test]
-fn test_campaign_while_leader() {
+fn test_campaign_while_leader_2aa_election() {
     let mut r = new_test_raft(1, vec![1], 5, 1, MemStorage::new()).unwrap();
     assert_eq!(r.role, State::Follower);
     // We don't call campaign() directly because it comes after the check
@@ -489,17 +488,17 @@ fn test_campaign_while_leader() {
 }
 
 #[test]
-fn test_follower_update_term_from_message() {
+fn test_follower_update_term_from_message_2ab_append() {
     test_update_term_from_message(State::Follower);
 }
 
 #[test]
-fn test_candidate_update_term_from_message() {
+fn test_candidate_update_term_from_message_2ab_append() {
     test_update_term_from_message(State::Candidate);
 }
 
 #[test]
-fn test_leader_update_term_from_message() {
+fn test_leader_update_term_from_message_2ab_append() {
     test_update_term_from_message(State::Leader);
 }
 
@@ -526,13 +525,13 @@ fn test_update_term_from_message(state: State) {
     assert_eq!(r.role, State::Follower);
 }
 
-// test_candidate_fallback tests that while waiting for votes,
+// test_candidate_fallback_2aa_election tests that while waiting for votes,
 // if a candidate receives an AppendEntries RPC from another server claiming
 // to be leader whose term is at least as large as the candidate's current term,
 // it recognizes the leader as legitimate and returns to follower state.
 // Reference: section 5.2
 #[test]
-fn test_candidate_fallback() {
+fn test_candidate_fallback_2aa_election() {
     let tests = vec![(2, 1, 2), (2, 1, 3)];
     for (from, to, term) in tests {
         let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, MemStorage::new()).unwrap();
@@ -546,13 +545,13 @@ fn test_candidate_fallback() {
     }
 }
 
-// test_handle_msg_append ensures:
+// test_handle_msg_append_2ab_append ensures:
 // 1. Reply false if log doesn’t contain an entry at `prev_log_index` whose term matches `prev_log_term`.
 // 2. If an existing entry conflicts with a new one (same index but different terms),
 //    delete the existing entry and all that follow it; append any new entries not already in the
 //    log.
 #[test]
-fn test_handle_msg_append() {
+fn test_handle_msg_append_2ab_append() {
     let nm = |term, log_term, index, commit, ents: Vec<(u64, u64)>| {
         let entries = ents.iter().map(|&(i, t)| empty_entry(t, i)).collect();
         let m = Message::new_append_msg(1, 1, term, commit, index, log_term, entries);
@@ -597,7 +596,7 @@ fn test_handle_msg_append() {
 }
 
 #[test]
-fn test_propose_message_to_leader() {
+fn test_propose_message_to_leader_2ab_append() {
     let storage = MemStorage::new();
     storage
         .wl()
@@ -685,7 +684,7 @@ fn test_propose_message_to_leader() {
 }
 
 #[test]
-fn test_propose_message_to_follower_and_candidate() {
+fn test_propose_message_to_follower_and_candidate_2ab_append() {
     let storage = MemStorage::new();
     let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, storage).unwrap();
     let propose_msg = Message::new_propose_msg(10, 1, vec![empty_entry(0, 0)]);
