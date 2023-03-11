@@ -180,6 +180,10 @@ message MsgRequestVoteResponse {
     uint64 term = 3;
     // reject the voted request or not
     bool reject = 4;
+    // the last log index of the follower
+    uint64 last_log_index = 5;
+    // the last log term of the follower
+    uint64 last_log_term = 6;
 }
 
 
